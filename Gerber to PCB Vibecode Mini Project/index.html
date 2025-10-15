@@ -1,469 +1,493 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Gerber (.zip) → G‑code (Ender‑3 Pick‑and‑Place)</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>.pos → Ender 3 G-code (Pick & Place travel)</title>
+
+<!--
+  pos2gcode.html
+  - Parses a KiCad .pos file (directly or from a .zip) and generates Ender-3-compatible G-code.
+  - Rotation is currently ignored (single-orientation head). Toggle later if you add an orientation axis.
+  - Uses JSZip (CDN) for in-browser unzip. For offline use, inline the library or vendor it locally.
+-->
+
 <style>
+  /* =========================
+   * THEME TOKENS (edit me!)
+   * - Neutral light UI with yellow accent
+   * ========================= */
   :root{
-    --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#22c55e; --accent-2:#38bdf8; --warn:#f59e0b; --danger:#ef4444; --ok:#10b981; --card:#0b1220; --chip:#1f2937;
+    --bg: #ffffff;          /* page background (white)             */
+    --text: #111111;        /* primary text (near black)           */
+    --muted: #555555;       /* secondary text (dark gray)          */
+    --card: #f5f5f5;        /* card background (light gray)        */
+    --line: #e5e5e5;        /* subtle borders/dividers             */
+    --accent: #ffd400;      /* yellow accent                       */
+    --accent-text: #111111; /* text on accent                      */
+    --ok: #0f9d58;          /* status: success                     */
+    --warn: #f59e0b;        /* status: warning                     */
+    --err: #e11d48;         /* status: error                       */
+
+    --input-bg: #ffffff;    /* input bg (white)                    */
+    --input-border: #cfcfcf;/* input border                        */
+    --input-focus: #999999; /* input border on focus               */
   }
-  *{box-sizing:border-box}
-  body{margin:0;background:linear-gradient(180deg,#0b1220,#0f172a 30%,#0b1220);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,Apple Color Emoji,Segoe UI Emoji;}
-  header{position:sticky;top:0;background:rgba(15,23,42,.75);backdrop-filter:blur(8px);border-bottom:1px solid #1f2937;z-index:5}
-  .wrap{max-width:1200px;margin:0 auto;padding:18px}
-  h1{font-size:22px;margin:0;letter-spacing:.2px}
-  .subtitle{color:var(--muted);font-size:13px}
-  main{max-width:1200px;margin:20px auto;display:grid;grid-template-columns:360px 1fr;gap:18px;padding:0 18px 32px}
-  .panel{background:var(--panel);border:1px solid #1f2937;border-radius:16px;padding:16px}
-  .panel h2{font-size:15px;letter-spacing:.3px;margin:0 0 10px}
-  .panel .section{border-top:1px dashed #253049;padding-top:12px;margin-top:12px}
-  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 6px}
-  input[type="text"], input[type="number"], select, textarea{width:100%;padding:9px 10px;border-radius:10px;border:1px solid #273244;background:#0b1220;color:var(--ink);font-size:13px}
-  textarea{min-height:88px;resize:vertical}
-  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid #2b394f;background:#0e1526;color:#e6edf7;padding:10px 12px;border-radius:12px;font-weight:600;cursor:pointer}
-  .btn:hover{border-color:#3b4b68}
-  .btn.primary{background:linear-gradient(180deg,#1f6feb,#1b4bcc);border-color:#1f6feb}
-  .btn.accent{background:linear-gradient(180deg,#22c55e,#16a34a);border-color:#22c55e}
-  .btn.danger{background:linear-gradient(180deg,#ef4444,#dc2626);border-color:#ef4444}
-  .pill{display:inline-block;padding:3px 8px;border-radius:999px;background:#132038;border:1px solid #253049;color:#9cc2ff;font-size:11px}
-  .drop{border:1px dashed #2b394f;border-radius:12px;padding:14px;text-align:center;background:#0b1220}
-  .drop.drag{outline:2px dashed var(--accent-2);outline-offset:2px}
-  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
-  .table{width:100%;border-collapse:collapse;font-size:12px}
-  .table th,.table td{border-bottom:1px solid #1f2937;padding:8px;text-align:left}
-  .chip{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid #374151;border-radius:999px;padding:2px 8px;font-size:11px;color:#e5e7eb}
-  .flex{display:flex;gap:10px;align-items:center}
-  .right{justify-content:flex-end}
-  .codebox{background:#0b1220;border:1px solid #273244;border-radius:12px;padding:12px;min-height:220px;white-space:pre;overflow:auto;font-size:12px}
-  .kbd{border:1px solid #374151;border-bottom-width:3px;border-radius:6px;padding:2px 6px}
-  .muted{color:var(--muted)}
-  .small{font-size:12px}
-  footer{max-width:1200px;margin:12px auto 38px;color:var(--muted);font-size:12px;padding:0 18px}
-  details{border:1px solid #273244;border-radius:12px;padding:8px 12px;background:#0b1220}
-  details summary{cursor:pointer;color:#cbd5e1}
+
+  /* =========================
+   * BASE LAYOUT
+   * ========================= */
+  * { box-sizing: border-box; }
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font:14px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  }
+  .wrap{ max-width:980px; margin:32px auto; padding:0 16px; }
+  h1{ font-size:1.4rem; margin:0 0 16px; }
+  .card{
+    background:var(--card);
+    border-radius:14px;
+    padding:16px;
+    margin:0 0 16px;
+    border:1px solid var(--line);
+    box-shadow:0 1px 0 #00000008;
+  }
+
+  /* =========================
+   * CONTROLS
+   * ========================= */
+  label{ display:block; margin:8px 0 4px; color:var(--muted); }
+  .row{ display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+  .row > div{ display:flex; flex-direction:column; }
+
+  input[type="number"], input[type="text"]{
+    width:160px;
+    background:var(--input-bg);
+    border:1px solid var(--input-border);
+    color:var(--text);
+    border-radius:10px;
+    padding:8px 10px;
+    outline:none;
+  }
+  input[type="number"]:focus,
+  input[type="text"]:focus{
+    border-color:var(--input-focus);
+  }
+  input[type="checkbox"]{ transform:translateY(1px); }
+
+  select{
+    width:180px;
+    background:var(--input-bg);
+    border:1px solid var(--input-border);
+    color:var(--text);
+    border-radius:10px;
+    padding:8px 10px;
+  }
+
+  button{
+    background:var(--accent);
+    color:var(--accent-text);
+    border:1px solid #d9b100;
+    border-radius:12px;
+    padding:10px 14px;
+    font-weight:700;
+    cursor:pointer;
+  }
+  button:hover{ filter:brightness(0.98); }
+  button[disabled]{ opacity:.5; cursor:not-allowed; }
+
+  .muted{ color:var(--muted); }
+  .ok{ color:var(--ok); }
+  .warn{ color:var(--warn); }
+  .err{ color:var(--err); }
+
+  /* =========================
+   * TABLE / PREVIEW
+   * ========================= */
+  table{ width:100%; border-collapse:collapse; font-size:12px; background:#fff; border:1px solid var(--line); }
+  th,td{ border-bottom:1px solid var(--line); padding:6px 8px; text-align:left; }
+  th{ position:sticky; top:0; background:#fafafa; }
+
+  /* Tiny UI badge used for the transform section */
+  .pill{
+    display:inline-block; padding:2px 8px; border-radius:999px;
+    background:#fffbe6; border:1px solid #ffe58f; color:#8b6f00; font-size:11px; font-weight:600;
+  }
+
+  /* Scroll container for preview table */
+  .scroll{ max-height:280px; overflow:auto; border-radius:8px; }
 </style>
 </head>
 <body>
-  <header>
-    <div class="wrap">
-      <h1>Gerber (.zip) → G‑code <span class="pill">Ender‑3 Pick‑and‑Place</span></h1>
-      <div class="subtitle">Drop a KiCad/Altium Gerber ZIP. If a centroid/position file is found inside, we’ll auto‑generate Marlin‑flavored G‑code. Default motion = <strong>50&nbsp;mm/s</strong>. All parts assumed <strong>0°</strong> (no orientation motor).</div>
+<div class="wrap">
+  <h1>OSHE Pick n' Place - Gerber to Gcode</h1>
+
+  <!-- =========================
+       CONTROL PANEL
+       ========================= -->
+  <div class="card">
+    <div class="row">
+      <!-- File input -->
+      <div>
+        <label>Upload .zip (with a .pos inside) or a single .pos</label>
+        <input id="file" type="file" accept=".zip,.pos" />
+      </div>
+
+      <!-- Motion / units -->
+      <div>
+        <label>Assumed feedrate (mm/min)</label>
+        <input id="feed" type="number" step="1" value="3000" />
+        <div class="muted">≈ 50&nbsp;mm/s</div>
+      </div>
+      <div>
+        <label>Scale (PCB units → mm)</label>
+        <input id="scale" type="number" step="0.0001" value="1.0" />
+        <div class="muted">KiCad .pos is mm ⇒ 1.0</div>
+      </div>
+
+      <!-- XY transforms -->
+      <div>
+        <label>Offset X (mm)</label>
+        <input id="offx" type="number" step="0.01" value="0" />
+      </div>
+      <div>
+        <label>Offset Y (mm)</label>
+        <input id="offy" type="number" step="0.01" value="0" />
+      </div>
+
+      <!-- Z parameters -->
+      <div>
+        <label>Safe Z (mm)</label>
+        <input id="zsafe" type="number" step="0.01" value="5" />
+      </div>
+      <div>
+        <label>Place Z (mm)</label>
+        <input id="zplace" type="number" step="0.01" value="0.5" />
+      </div>
+      <div>
+        <label>Dwell at place (ms)</label>
+        <input id="dwell" type="number" step="1" value="200" />
+      </div>
+
+      <!-- Transform toggles -->
+      <div>
+        <label><span class="pill">Transform</span></label>
+        <div class="muted">
+          <input id="flipY" type="checkbox" checked /> Flip Y sign
+          &nbsp;&nbsp;<input id="zeroAtFirst" type="checkbox" /> Zero at 1st part
+        </div>
+      </div>
+
+      <!-- Sort order -->
+      <div>
+        <label>Order by</label>
+        <select id="order">
+          <option value="x">X increasing</option>
+          <option value="y">Y increasing</option>
+          <option value="ref">Reference (A→Z, numeric aware)</option>
+        </select>
+      </div>
     </div>
-  </header>
 
-  <main>
-    <!-- Left: Controls -->
-    <aside class="panel" id="controls">
-      <h2>1) Import Gerber ZIP</h2>
-      <div class="drop" id="drop">
-        <div><strong>Drop .zip here</strong> or <label for="zipfile" class="btn" style="margin:6px 0">Choose ZIP</label></div>
-        <input id="zipfile" type="file" accept=".zip" style="display:none" />
-        <div class="muted small">We’ll scan for centroid files inside (e.g., *.pos, *pick*place*.csv). Gerbers themselves do <em>not</em> contain placements.</div>
-      </div>
+    <!-- Action buttons + status -->
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button id="parseBtn" disabled>Parse & Preview</button>
+      <button id="makeBtn" disabled>Generate & Download G-code</button>
+      <span id="status" class="muted">No file loaded yet.</span>
+    </div>
+  </div>
 
-      <div class="section">
-        <h2>2) Board → Printer Transform</h2>
-        <div class="row">
-          <div>
-            <label>Board units</label>
-            <select id="units">
-              <option value="mm">Millimeters (mm)</option>
-              <option value="inch">Inches (inch)</option>
-            </select>
-          </div>
-          <div>
-            <label>Scale</label>
-            <input id="scale" type="number" step="0.0001" value="1" />
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Board origin offset X (mm)</label>
-            <input id="offX" type="number" step="0.01" value="0" />
-          </div>
-          <div>
-            <label>Board origin offset Y (mm)</label>
-            <input id="offY" type="number" step="0.01" value="0" />
-          </div>
-        </div>
-        <div class="row">
-          <div>
-            <label>Rotate board (°)</label>
-            <input id="boardRot" type="number" step="0.1" value="0" />
-          </div>
-          <div>
-            <label>Mirror bottom side</label>
-            <select id="mirrorBottom">
-              <option value="true">Yes</option>
-              <option value="false" selected>No</option>
-            </select>
-          </div>
-        </div>
-      </div>
+  <!-- =========================
+       PREVIEW AREA
+       ========================= -->
+  <div class="card">
+    <strong>Preview (first 30 rows)</strong>
+    <div id="preview" class="muted">—</div>
+  </div>
 
-      <div class="section">
-        <h2>3) Z & Motion</h2>
-        <div class="grid3">
-          <div>
-            <label>Travel Z (mm)</label>
-            <input id="zTravel" type="number" step="0.01" value="5" />
-          </div>
-          <div>
-            <label>Place Z (mm)</label>
-            <input id="zPlace" type="number" step="0.01" value="0.2" />
-          </div>
-          <div>
-            <label>Approach ΔZ (mm)</label>
-            <input id="zApproach" type="number" step="0.01" value="1.0" />
-          </div>
-        </div>
-        <div class="grid3" style="margin-top:8px">
-          <div>
-            <label>Travel feed (mm/min)</label>
-            <input id="fTravel" type="number" step="1" value="3000" />
-          </div>
-          <div>
-            <label>Place feed (mm/min)</label>
-            <input id="fPlace" type="number" step="1" value="3000" />
-          </div>
-          <div>
-            <label>Dwell after place (ms)</label>
-            <input id="dwellMs" type="number" step="10" value="150" />
-          </div>
-        </div>
-        <div class="small muted" style="margin-top:6px">Feeds default to 50&nbsp;mm/s (3000&nbsp;mm/min) per your request.</div>
-      </div>
+  <!-- =========================
+       NOTES
+       ========================= -->
+  <div class="card">
+    <strong>Notes</strong>
+    <ul class="muted">
+      <li>Designed for KiCad “Footprint positions” files (e.g., headers like “## Unit = mm, Angle = deg.”).</li>
+      <li>Columns expected: <code>Ref Val Package PosX PosY Rot Side</code>. Comment lines (<code>#</code>) are ignored.</li>
+      <li>Rotation is ignored (single orientation toolhead). You can enable it later when you add an orientation axis.</li>
+      <li><em>Flip Y</em> defaults on because many PCB exports have negative Y; Ender bed coords are typically positive Y up.</li>
+    </ul>
+  </div>
+</div>
 
-      <div class="section">
-        <h2>4) Feeder Map (optional)</h2>
-        <div class="small muted">Map a component <em>Value</em> (e.g., 10k, 0603 cap) to a feeder pickup location & macro. Rows match by <strong>Value</strong>.</div>
-        <table class="table" id="feederTable">
-          <thead>
-            <tr><th>Value (match)</th><th>Feeder X</th><th>Feeder Y</th><th>Pickup Z</th><th>Pick Macro</th><th>Advance Macro</th><th></th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-        <div class="flex right" style="margin-top:8px"><button class="btn" id="addFeeder">Add Feeder</button></div>
-      </div>
-
-      <div class="section">
-        <h2>5) Macros</h2>
-        <label>Pick (vacuum ON) macro</label>
-        <input id="macroPick" type="text" value="; PICK\nM106 S255 ; fan on as vacuum" />
-        <label>Place (vacuum OFF) macro</label>
-        <input id="macroPlace" type="text" value="; PLACE\nM106 S0 ; fan off" />
-        <label>Per‑component comment format</label>
-        <input id="macroComment" type="text" value="; {ref} {val} {pkg} rot=0° side={side}" />
-      </div>
-
-      <div class="section">
-        <h2>6) Generate</h2>
-        <div class="flex right">
-          <button class="btn accent" id="genBtn">Generate G‑code</button>
-        </div>
-      </div>
-    </aside>
-
-    <!-- Right: Data & Output -->
-    <section class="panel">
-      <h2>Preview</h2>
-      <div class="flex" style="justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div>
-          <span class="chip" id="zipInfo">No ZIP loaded</span>
-          <span class="chip" id="chipParts">0 parts</span>
-        </div>
-        <div class="flex">
-          <button class="btn primary" id="dlBtn" title="Download generated G-code" disabled>Download .gcode</button>
-        </div>
-      </div>
-      <div style="max-height:260px;overflow:auto;border:1px solid #1f2937;border-radius:12px">
-        <table class="table" id="preview">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-
-      <div class="section">
-        <h2>G‑code</h2>
-        <div class="codebox mono" id="gcodeBox">; Load a Gerber ZIP with a centroid file inside to begin…</div>
-      </div>
-
-      <div class="section">
-        <h2>Notes</h2>
-        <ul class="small muted">
-          <li>Gerbers do not contain placement coordinates. This app scans your ZIP for common centroid files (KiCad *.pos, Altium pick/place CSV). If none are found, we’ll let you know which filenames to include.</li>
-          <li>All components are forced to <strong>0° rotation</strong> in output per your constraint (no orientation motor yet).</li>
-          <li>Use <span class="kbd">G92 X0 Y0 Z0</span> at the printer to sync origin.</li>
-        </ul>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    Built for rapid offline use. No data leaves your browser. — v0.2 (Gerber ZIP)
-  </footer>
-
-<!-- JSZip (CDN) -->
+<!-- JSZip for in-browser unzip (CDN).
+     For offline use: vendor JSZip locally and swap this <script> src. -->
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
 <script>
-// --- Utilities --------------------------------------------------------------
-const $ = (q) => document.querySelector(q);
-const el = (tag, attrs={}, children=[])=>{const n=document.createElement(tag);for(const k in attrs){if(k==="text")n.textContent=attrs[k];else n.setAttribute(k,attrs[k])}children.forEach(c=>n.appendChild(c));return n};
-function parseCSV(text){
-  const rows=[]; let cur='', inQ=false; let r=[];
-  for(let i=0;i<text.length;i++){
-    const c=text[i]; const n=text[i+1];
-    if(c==='"'){
-      if(inQ && n==='"'){cur+='"'; i++;} else inQ=!inQ;
-    } else if(c===',' && !inQ){ r.push(cur); cur=''; }
-    else if((c==='\n' || c==='\r') && !inQ){ if(cur!==''||r.length){r.push(cur); rows.push(r); r=[]; cur='';} }
-    else cur+=c;
-  }
-  if(cur!==''||r.length) { r.push(cur); rows.push(r); }
-  return rows.filter(row=>row.some(x=>String(x).trim().length));
+/* =========================
+ * UTIL SHORTCUTS & STATE
+ * ========================= */
+const $ = sel => document.querySelector(sel);
+const fileInput = $('#file');
+const parseBtn  = $('#parseBtn');
+const makeBtn   = $('#makeBtn');
+const statusEl  = $('#status');
+const previewEl = $('#preview');
+
+let parsedRows = [];      // Array<{ref,val,pkg,x,y,rot,side}>
+let lastGcode  = '';      // Generated G-code text cache
+let filenameBase = 'output';
+
+/** Update status line with style */
+function setStatus(msg, cls='muted'){
+  statusEl.className = cls;
+  statusEl.textContent = msg;
 }
-function toNumber(v){ if(v===undefined||v===null) return NaN; const s=String(v).trim(); if(!s) return NaN; const t=s.replace(/[°]/g,''); const num=parseFloat(t); return isFinite(num)?num:NaN; }
-function deg2rad(d){return d*Math.PI/180}
-function rotatePoint(x,y,deg){ const r=deg2rad(deg); const c=Math.cos(r), s=Math.sin(r); return [x*c - y*s, x*s + y*c]; }
-function download(filename, text){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([text],{type:'text/plain'})); a.download=filename; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),5000); }
 
-// --- State -----------------------------------------------------------------
-let headers=[];    // detected headers from centroid file
-let rawRows=[];    // centroid rows (without header)
-let mapped=[];     // normalized parts
-let feeders=[];    // feeder map rows
+/**
+ * Natural sort for references like R1, R10, C2 (R2 < R10).
+ * Splits alpha and numeric segments and compares piecewise.
+ */
+function natCompare(a,b){
+  const ax = [], bx = [];
+  a.replace(/(\d+)|(\D+)/g, (_,n,na) => ax.push([n||Infinity, na||'']));
+  b.replace(/(\d+)|(\D+)/g, (_,n,na) => bx.push([n||Infinity, na||'']));
+  while(ax.length && bx.length) {
+    const an=ax.shift(), bn=bx.shift();
+    const s = (an[1]||'').localeCompare(bn[1]||'');
+    if (s) return s;
+    const nn = (parseInt(an[0],10)||0) - (parseInt(bn[0],10)||0);
+    if (nn) return nn;
+  }
+  return ax.length - bx.length;
+}
 
-// --- DOM elements ----------------------------------------------------------
-const zipIn=$('#zipfile');
-const drop=$('#drop');
-const previewHead=$('#preview thead');
-const previewBody=$('#preview tbody');
-const chipParts=$('#chipParts');
-const zipInfo=$('#zipInfo');
-const gcodeBox=$('#gcodeBox');
-const dlBtn=$('#dlBtn');
+/* =========================
+ * FILE SELECTION HANDLER
+ * ========================= */
+fileInput.addEventListener('change', () => {
+  parsedRows = [];
+  lastGcode = '';
+  previewEl.innerHTML = '—';
+  setStatus('File selected. Click “Parse & Preview”.', 'ok');
+  parseBtn.disabled = false;
+  makeBtn.disabled = true;
 
-// Controls
-const unitsSel=$('#units');
-const scaleIn=$('#scale');
-const offXIn=$('#offX');
-const offYIn=$('#offY');
-const boardRotIn=$('#boardRot');
-const mirrorBottomSel=$('#mirrorBottom');
+  const f = fileInput.files[0];
+  filenameBase = f ? (f.name.replace(/\.(zip|pos)$/i,'') || 'output') : 'output';
+});
 
-const zTravelIn=$('#zTravel');
-const zPlaceIn=$('#zPlace');
-const zApproachIn=$('#zApproach');
-const fTravelIn=$('#fTravel');
-const fPlaceIn=$('#fPlace');
-const dwellMsIn=$('#dwellMs');
+/* =========================
+ * PARSE CLICK HANDLER
+ * - Reads .pos (direct) OR first .pos found in .zip
+ * - Parses into normalized rows
+ * ========================= */
+parseBtn.addEventListener('click', async () => {
+  parseBtn.disabled = true;
+  makeBtn.disabled = true;
+  setStatus('Parsing…');
 
-const macroPickIn=$('#macroPick');
-const macroPlaceIn=$('#macroPlace');
-const macroCommentIn=$('#macroComment');
+  try {
+    const f = fileInput.files[0];
+    if (!f) throw new Error('No file selected');
 
-const feederTable=$('#feederTable tbody');
-const addFeederBtn=$('#addFeeder');
+    let posText = '';
 
-// --- Drag & Drop ZIP -------------------------------------------------------
-['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('drag')}));
-['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('drag')}));
-drop.addEventListener('drop', (e)=>{ const f=e.dataTransfer.files && e.dataTransfer.files[0]; if(f) loadZip(f); });
-zipIn.addEventListener('change', e=>{ const f=e.target.files && e.target.files[0]; if(f) loadZip(f); });
-
-async function loadZip(file){
-  gcodeBox.textContent='; Reading ZIP…';
-  try{
-    const zip = await JSZip.loadAsync(file);
-    const names = Object.keys(zip.files);
-    zipInfo.textContent = `${names.length} files in ZIP`;
-
-    // Find a centroid candidate
-    const candidates = names.filter(n=>/pos|pick.*place|centroid|position/i.test(n) && /\.(csv|txt|pos)$/i.test(n));
-    if(!candidates.length){
-      gcodeBox.textContent = '; No centroid file found in ZIP. Expected something like *.pos or *pick*place*.csv. Add one and reload.';
-      mapped=[]; renderPreview([]); dlBtn.disabled=true; return;
+    // Support direct .pos upload
+    if (f.name.toLowerCase().endsWith('.pos')) {
+      posText = await f.text();
     }
-    // Prefer *.pos then CSV
-    candidates.sort((a,b)=>{const prio=(n)=>/\.pos$/i.test(n)?0:/\.csv$/i.test(n)?1:2; return prio(a)-prio(b)});
-    const chosen = candidates[0];
-    const text = await zip.file(chosen).async('string');
+    // Or .zip containing a .pos
+    else if (f.name.toLowerCase().endsWith('.zip')) {
+      const buf = await f.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
 
-    // Parse centroid with flexible delimiters (comma or tab)
-    const csvLike = /,/.test(text) ? text : text.replace(/[\t;]+/g,',');
-    const rows = parseCSV(csvLike);
-    if(!rows.length){ gcodeBox.textContent='; Centroid file empty or unreadable.'; return; }
+      // find the first *.pos file in the zip (simple heuristic)
+      const posName = Object.keys(zip.files).find(n => n.toLowerCase().endsWith('.pos'));
+      if (!posName) throw new Error('No .pos file found inside the zip.');
+      posText = await zip.file(posName).async('string');
 
-    // Heuristic header + column mapping for common KiCad/Altium exports
-    headers = rows[0].map(h=>String(h).trim());
-    rawRows = rows.slice(1);
-
-    const idxOf = (guesses)=>{
-      const i = headers.findIndex(h=>guesses.some(g=>h.toLowerCase().includes(g)));
-      return i>=0?i:0;
-    };
-    const iref = idxOf(['ref','designator','component','reference']);
-    const ival = idxOf(['val','value']);
-    const ipkg = idxOf(['pkg','package','footprint']);
-    const iside= idxOf(['side','layer']);
-    const ix   = idxOf(['x','posx','center-x']);
-    const iy   = idxOf(['y','posy','center-y']);
-    // rot will be ignored (forced to 0), but we try to read for completeness
-    const irot = idxOf(['rot','rotation','angle']);
-
-    const u = (v)=>v; // raw string
-    const n = (v)=>toNumber(v);
-
-    const units = unitsSel.value; const scale=parseFloat(scaleIn.value)||1;
-
-    mapped = rawRows.map(r=>{
-      let x=n(r[ix]); let y=n(r[iy]);
-      if(units==='inch'){x*=25.4; y*=25.4;}
-      x*=scale; y*=scale;
-      return {
-        ref: u(r[iref]||''),
-        val: u(r[ival]||''),
-        pkg: u(r[ipkg]||''),
-        side: u(r[iside]||'Top'),
-        x, y,
-        rot: 0 // FORCE 0° — machine has no orientation motor
-      };
-    }).filter(o=>isFinite(o.x)&&isFinite(o.y));
-
-    renderPreview(mapped);
-    gcodeBox.textContent = `; Parsed ${mapped.length} parts from ${chosen}. Ready to generate.`;
-
-  }catch(err){
-    console.error(err);
-    gcodeBox.textContent = '; ZIP read error: '+err.message;
-  }
-}
-
-function renderPreview(list){
-  previewHead.innerHTML=''; previewBody.innerHTML='';
-  const headTr=el('tr',{},[
-    el('th',{text:'Ref'}), el('th',{text:'Val'}), el('th',{text:'Pkg'}), el('th',{text:'Side'}), el('th',{text:'X (mm)'}), el('th',{text:'Y (mm)'}), el('th',{text:'Rot (°)'}),
-  ]);
-  previewHead.appendChild(headTr);
-  list.slice(0,500).forEach(o=>{
-    const tr=el('tr',{},[
-      el('td',{text:o.ref}), el('td',{text:o.val}), el('td',{text:o.pkg}), el('td',{text:o.side}), el('td',{text:o.x.toFixed(3)}), el('td',{text:o.y.toFixed(3)}), el('td',{text:'0.0'}),
-    ]);
-    previewBody.appendChild(tr);
-  });
-  chipParts.textContent = list.length+" parts";
-  dlBtn.disabled = !list.length;
-}
-
-// --- Feeders ---------------------------------------------------------------
-function addFeederRow(f={value:'', x:0,y:0,zPick:0, macroPick:'', macroAdv:''}){
-  const tr=document.createElement('tr');
-  const mk=(ph)=>el('input',{type:'text',value:ph});
-  const num=(v)=>{const i=el('input',{type:'number'}); i.value=v; i.step='0.01'; return i};
-  const tdVal=el('td'); const iVal=mk(f.value); tdVal.appendChild(iVal);
-  const tdX=el('td'); const iX=num(f.x); tdX.appendChild(iX);
-  const tdY=el('td'); const iY=num(f.y); tdY.appendChild(iY);
-  const tdZ=el('td'); const iZ=num(f.zPick); tdZ.appendChild(iZ);
-  const tdMP=el('td'); const iMP=mk(f.macroPick||''); tdMP.appendChild(iMP);
-  const tdMA=el('td'); const iMA=mk(f.macroAdv||''); tdMA.appendChild(iMA);
-  const tdDel=el('td'); const b=el('button',{class:'btn danger',text:'Del'}); tdDel.appendChild(b);
-  tr.append(tdVal,tdX,tdY,tdZ,tdMP,tdMA,tdDel);
-  b.addEventListener('click',()=>{ tr.remove(); syncFeeders(); });
-  [iVal,iX,iY,iZ,iMP,iMA].forEach(inp=>inp.addEventListener('input', syncFeeders));
-  feederTable.appendChild(tr);
-  syncFeeders();
-}
-function syncFeeders(){
-  feeders=[...feederTable.querySelectorAll('tr')].map(tr=>{
-    const [iVal,iX,iY,iZ,iMP,iMA]=[...tr.querySelectorAll('input')];
-    return {value:iVal.value.trim(), x:parseFloat(iX.value)||0, y:parseFloat(iY.value)||0, zPick:parseFloat(iZ.value)||0, macroPick:iMP.value, macroAdv:iMA.value};
-  }).filter(f=>f.value);
-}
-addFeederBtn.addEventListener('click',()=>addFeederRow());
-
-// --- Transform & G-code generation ----------------------------------------
-function transformPoint(o){
-  let {x,y,side}=o; let rot=0; // forced
-  if(String(mirrorBottomSel.value)==='true' && /bot|bottom/i.test(side)){
-    x = -x; // mirror around Y
-  }
-  const [xr,yr] = rotatePoint(x,y, parseFloat(boardRotIn.value)||0);
-  x = xr + (parseFloat(offXIn.value)||0);
-  y = yr + (parseFloat(offYIn.value)||0);
-  return {x,y,rot,side};
-}
-function matchFeeder(val){ return feeders.find(f=>f.value.toLowerCase()===String(val).toLowerCase())||null; }
-
-function generateGcode(){
-  if(!mapped.length){ alert('Load a ZIP with a centroid file first.'); return ''; }
-  const zT=parseFloat(zTravelIn.value)||5;
-  const zP=parseFloat(zPlaceIn.value)||0.2;
-  const zA=parseFloat(zApproachIn.value)||1.0;
-  const fT=parseFloat(fTravelIn.value)||3000; // 50 mm/s default
-  const fP=parseFloat(fPlaceIn.value)||3000; // 50 mm/s default
-  const dwell=parseInt(dwellMsIn.value)||0;
-
-  const pickMacro = macroPickIn.value;
-  const placeMacro= macroPlaceIn.value;
-  const commentFmt= macroCommentIn.value;
-
-  const ts=new Date().toISOString();
-  let out = '';
-  out += `; GERBER ZIP → GCODE for Ender‑3 PnP\n`;
-  out += `; Generated ${ts}\n`;
-  out += `; Parts: ${mapped.length}\n`;
-  out += `; Rotation forced to 0° for all parts\n`;
-  out += `G90\nG21\nG0 Z${zT.toFixed(3)} F${fT}\n`;
-
-  for(const part of mapped){
-    const t = transformPoint(part);
-    const f = matchFeeder(part.val);
-    const comment = commentFmt
-      .replaceAll('{ref}',part.ref)
-      .replaceAll('{val}',part.val)
-      .replaceAll('{pkg}',part.pkg)
-      .replaceAll('{rot}','0')
-      .replaceAll('{side}',part.side);
-
-    out += `\n${comment}\n`;
-
-    if(f){
-      out += `; feeder for value=${part.val}\n`;
-      out += `G0 Z${zT.toFixed(3)} F${fT}\n`;
-      out += `G0 X${f.x.toFixed(3)} Y${f.y.toFixed(3)} F${fT}\n`;
-      if(f.macroAdv && f.macroAdv.trim()) out += f.macroAdv.trim()+"\n";
-      out += `G0 Z${(f.zPick+zA).toFixed(3)} F${fT}\n`;
-      out += `G1 Z${f.zPick.toFixed(3)} F${fP}\n`;
-      if(pickMacro && pickMacro.trim()) out += pickMacro.trim()+"\n";
-      out += `G0 Z${zT.toFixed(3)} F${fT}\n`;
-    } else {
-      out += `; no feeder match for value=${part.val} (skipping pick)\n`;
+      // Use the inner .pos name for the output base name
+      filenameBase = posName.split('/').pop().replace(/\.pos$/i,'') || filenameBase;
+    }
+    else {
+      throw new Error('Unsupported file type. Please choose a .zip (with .pos) or a .pos file.');
     }
 
-    out += `G0 X${t.x.toFixed(3)} Y${t.y.toFixed(3)} F${fT}\n`;
-    out += `G0 Z${(zP+zA).toFixed(3)} F${fT}\n`;
-    out += `G1 Z${zP.toFixed(3)} F${fP}\n`;
-    if(placeMacro && placeMacro.trim()) out += placeMacro.trim()+"\n";
-    if(dwell>0) out += `G4 P${dwell}\n`;
-    out += `G0 Z${zT.toFixed(3)} F${fT}\n`;
+    // Parse the text content of the .pos
+    parsedRows = parseKiCadPos(posText);
+    if (!parsedRows.length) throw new Error('No placement rows parsed.');
+
+    // Show a small preview (first 30) for quick sanity check
+    previewTable(parsedRows.slice(0,30));
+    setStatus(`Parsed ${parsedRows.length} placements.`, 'ok');
+    makeBtn.disabled = false;
+  } catch (e) {
+    setStatus(`Error: ${e.message}`, 'err');
+    console.error(e);
+  } finally {
+    parseBtn.disabled = false;
   }
-  out += `\n; done\nG0 Z${zT.toFixed(3)} F${fT}\nM84\n`;
-  return out;
+});
+
+/* =========================
+ * GENERATE G-CODE CLICK HANDLER
+ * ========================= */
+makeBtn.addEventListener('click', () => {
+  if (!parsedRows.length) { setStatus('Nothing parsed yet.', 'warn'); return; }
+
+  // Read UI parameters with sane fallbacks
+  const feed  = +$('#feed').value  || 3000; // mm/min
+  const scale = +$('#scale').value || 1.0;
+  const offx  = +$('#offx').value  || 0;
+  const offy  = +$('#offy').value  || 0;
+  const zsafe = +$('#zsafe').value || 5;
+  const zpl   = +$('#zplace').value|| 0.5;
+  const dwell = Math.max(0, (+$('#dwell').value)|0);
+  const flipY = $('#flipY').checked;
+  const zeroAtFirst = $('#zeroAtFirst').checked;
+  const order = $('#order').value;
+
+  // Copy rows to avoid mutating the original
+  let rows = [...parsedRows];
+
+  // Sort order (reference natural, x, y)
+  if (order === 'ref') rows.sort((a,b)=>natCompare(a.ref,b.ref));
+  else if (order === 'x') rows.sort((a,b)=>a.x-b.x);
+  else if (order === 'y') rows.sort((a,b)=>a.y-b.y);
+
+  // Optional: zero coordinate system to the first placement
+  let zx = 0, zy = 0;
+  if (zeroAtFirst && rows.length) { zx = rows[0].x; zy = rows[0].y; }
+
+  // ---- Build G-code program ----
+  const lines = [];
+  lines.push('; --- Generated by pos2gcode (browser) ---');
+  lines.push('; Units: mm, Absolute positioning');
+  lines.push('G21');                     // mm units
+  lines.push('G90');                     // absolute positioning
+  lines.push('M82 ; extruder absolute (not used, but keeps firmware happy)');
+  lines.push('M104 S0 ; hotend off');    // safety defaults
+  lines.push('M140 S0 ; bed off');
+  lines.push('G28 ; home all axes');
+  lines.push(`G0 Z${fmt(zsafe)} F${feed}`);
+  lines.push('');
+
+  let i=0;
+  for (const r of rows) {
+    // Transform PCB coords -> printer coords
+    let x = (r.x - zx) * scale;
+    let y = (r.y - zy) * scale;
+    if (flipY) y = -y;
+    x += offx; y += offy;
+
+    // Comment line for traceability
+    lines.push(`; ${++i}. ${r.ref} (${r.val}) ${r.pkg} @ posX=${fmt(r.x)} posY=${fmt(r.y)} rot=${fmt(r.rot)} side=${r.side}`);
+
+    // Safe travel, move to XY, place Z, optional dwell
+    lines.push(`G0 Z${fmt(zsafe)} F${feed}`);
+    lines.push(`G0 X${fmt(x)} Y${fmt(y)} F${feed}`);
+    lines.push(`G0 Z${fmt(zpl)} F${feed}`);
+    if (dwell > 0) lines.push(`G4 P${dwell} ; dwell`);
+    lines.push('');
+  }
+
+  // Park & release steppers
+  lines.push('; Return to origin & disable steppers');
+  lines.push(`G0 Z${fmt(zsafe)} F${feed}`);
+  lines.push('G0 X0 Y0 F6000');
+  lines.push('M84');
+
+  lastGcode = lines.join('\n');
+  downloadText(`${filenameBase}.gcode`, lastGcode);
+  setStatus(`G-code generated: ${filenameBase}.gcode`, 'ok');
+});
+
+/* =========================
+ * HELPERS
+ * ========================= */
+
+/** Format number: trim trailing zeros neatly */
+function fmt(n){
+  return (+n).toFixed(3).replace(/\.?0+$/,'');
 }
 
-$('#genBtn').addEventListener('click', ()=>{
-  try{ const g=generateGcode(); if(g){ gcodeBox.textContent=g; dlBtn.disabled=false; } }
-  catch(err){ console.error(err); alert('Generation error: '+err.message); }
-});
-$('#dlBtn').addEventListener('click', ()=>{ download('pcb_pnp_'+Date.now()+'.gcode', gcodeBox.textContent||''); });
+/**
+ * Parse KiCad .pos content
+ * - Ignores comment/blank lines
+ * - Extracts trailing numeric fields: PosX PosY Rot Side
+ * - Splits left side as Ref, Val, Package (package may contain spaces/dashes)
+ */
+function parseKiCadPos(text){
+  const rows = [];
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const s = line.trim();
+    if (!s || s.startsWith('#')) continue;
 
-// Generic change re-render (origin changes etc.)
-['units','scale','offX','offY','boardRot','mirrorBottom'].forEach(id=>{
-  document.getElementById(id).addEventListener('change', ()=>{ if(mapped.length) renderPreview(mapped); });
-});
+    // Example row:
+    // D5  D  P1_DO-41   101.7500  -119.6700  -90.0000  top
+    const m = s.match(/^(.*\S)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+(\S+)$/);
+    if (!m) continue;
+
+    const left = m[1].trim();
+    const posx = parseFloat(m[2]);
+    const posy = parseFloat(m[3]);
+    const rot  = parseFloat(m[4]);
+    const side = m[5];
+
+    // Split left into Ref, Val, Package (best-effort, package may contain spaces)
+    const tokens = left.split(/\s+/);
+    const ref = tokens[0] || '';
+    const val = tokens[1] || '';
+    const pkg = tokens.slice(2).join(' ') || '';
+
+    rows.push({ ref, val, pkg, x: posx, y: posy, rot, side });
+  }
+  return rows;
+}
+
+/** Build an HTML preview table for a small subset of rows */
+function previewTable(rows){
+  if (!rows.length){
+    previewEl.textContent = '—';
+    return;
+  }
+  const head = `<tr>
+    <th>#</th><th>Ref</th><th>Val</th><th>Package</th><th>PosX</th><th>PosY</th><th>Rot</th><th>Side</th>
+  </tr>`;
+  const body = rows.map((r,i)=>`<tr>
+    <td>${i+1}</td>
+    <td>${escapeHtml(r.ref)}</td>
+    <td>${escapeHtml(r.val)}</td>
+    <td>${escapeHtml(r.pkg)}</td>
+    <td>${fmt(r.x)}</td>
+    <td>${fmt(r.y)}</td>
+    <td>${fmt(r.rot)}</td>
+    <td>${escapeHtml(r.side)}</td>
+  </tr>`).join('');
+  previewEl.innerHTML =
+    `<div class="muted" style="margin-bottom:8px">${rows.length} shown (more rows hidden)</div>
+     <div class="scroll"><table>${head}${body}</table></div>`;
+}
+
+/** Escape HTML for safe injection */
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+/** Trigger a client-side download of text content */
+function downloadText(name, text){
+  const blob = new Blob([text], {type:'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 0);
+}
 </script>
 </body>
 </html>
