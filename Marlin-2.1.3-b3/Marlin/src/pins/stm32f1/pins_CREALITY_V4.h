@@ -155,10 +155,10 @@
 // Heaters / Fans
 //
 #ifndef HEATER_0_PIN
-  #define HEATER_0_PIN                      PA2   // HEATER1
+  #define HEATER_0_PIN                      PA1   // HEATER1
 #endif
 #ifndef HEATER_BED_PIN
-  #define HEATER_BED_PIN                    PA1   // HOT BED   //flipped these two values
+  #define HEATER_BED_PIN                    PA2   // HOT BED   //flipped these two values
 #endif
 #ifndef FAN0_PIN
   #define FAN0_PIN                          PA0   // FAN
