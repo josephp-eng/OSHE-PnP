@@ -2,7 +2,7 @@
 
 &nbsp;	We are part of the Open Source Hardware Enterprise (OSHE) Pick-and-Place project. This project was made possible by students at Michigan Technological University and was designed to create a low-cost PCB-building machine accessible to hobbyists and other students. Currently, many pick-and-place machines are expensive and are found only in industry. 
 
-&nbsp;	The OSHE Pick and Place is an entirely open-source system that uses readily available components and is assembled and operated with no specialized tooling.
+&nbsp;	The OSHE Pick and Place is an entirely open-source system that uses readily available components and is assembled and operated with no specialized tooling. Other OSHE projects can be found [here!](https://github.com/OSHE-Github)
 
 This project was designed first and foremost with the components and hardware of the Creality Ender 3 in mind. It can be built with individually sourced parts, but it will be more difficult.
 
