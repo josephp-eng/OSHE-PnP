@@ -13,7 +13,7 @@ Each subsystem is organized in the proceeding folders. Various STL and STEP file
 It is recommended to print almost everything in PLA. Gyroid infill is the best pattern for strength on a majority of these parts. The Ender 3 LCD back cover can be found on thingiverse. Make sure to print two rod holders.
 
 * Print with a 0.4mm nozzle
-* >15% infill
+* At least 15% infill
 * 0.2mm layers
 * Tree supports (organic if available)
 * 2-3 wall loops
