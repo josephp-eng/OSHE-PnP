@@ -145,6 +145,16 @@
 #endif
 #define E0_ENABLE_PIN               X_ENABLE_PIN
 
+#ifndef Y2_STEP_PIN
+  #define Y2_STEP_PIN   E0_STEP_PIN
+#endif
+#ifndef Y2_DIR_PIN
+  #define Y2_DIR_PIN    E0_DIR_PIN
+#endif
+#ifndef Y2_ENABLE_PIN
+  #define Y2_ENABLE_PIN E0_ENABLE_PIN
+#endif
+
 //
 // Temperature Sensors
 //
