@@ -137,13 +137,23 @@
 #endif
 #define Z_ENABLE_PIN                X_ENABLE_PIN
 
-#ifndef E0_STEP_PIN
-  #define E0_STEP_PIN                       PB4
+//#ifndef E0_STEP_PIN
+//  #define E0_STEP_PIN                       PB4
+//#endif
+//#ifndef E0_DIR_PIN
+//  #define E0_DIR_PIN                        PB3
+//#endif
+//#define E0_ENABLE_PIN               X_ENABLE_PIN
+
+#ifndef Y2_STEP_PIN
+  #define Y2_STEP_PIN  PB4   // E0 STEP pin
 #endif
-#ifndef E0_DIR_PIN
-  #define E0_DIR_PIN                        PB3
+#ifndef Y2_DIR_PIN
+  #define Y2_DIR_PIN   PB3   // E0 DIR pin
 #endif
-#define E0_ENABLE_PIN               X_ENABLE_PIN
+#ifndef Y2_ENABLE_PIN
+  #define Y2_ENABLE_PIN X_ENABLE_PIN
+#endif
 
 //
 // Temperature Sensors
