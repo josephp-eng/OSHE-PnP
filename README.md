@@ -1,19 +1,23 @@
-# Open Source Pick and Place Project
-Open Source Hardware Enterprise (OSHE) at Michigan Technological University
+# OSHE Pick and Place Project (V2.0)
+*Michigan Technological University - Open Source Hardware Enterprise*
 
-## Introduction
+The OSHE Pick and Place is a low-cost, Cartesian PCB assembly machine repurposed from Creality Ender 3 hardware.
+This project was designed to be made from a 3D printer, but can be built from individually sourced parts. Our platform was not designed with OpenPnP software in mind, but could be used with their system with some tuning.
 
-&nbsp;	We are part of the OSHE Pick-and-Place project. This project was made possible by students at Michigan Technological University and was designed to create a low-cost PCB-building machine accessible to hobbyists and other students. Currently, many pick-and-place machines are expensive and are found only in industry. 
+## Project Status: V2.0 (Spring 2026)
+We are currently in Phase 2 of development, focusing on toolhead optimization and Klipper integration.
+* **Firmware:** Klipper (Active) | [Link to Configs](./Software/Klipper)
+* **Hardware:** Revised Toolhead V2.0 | [Link to CAD](./CAD/V2)
+* **Documentation:** [Live Google Doc Link]
 
-&nbsp;	The OSHE Pick and Place is an entirely open-source system that uses readily available components and is assembled and operated with no specialized tooling. Other OSHE projects can be found [here!](https://github.com/OSHE-Github)
-
-This project was designed first and foremost with the components and hardware of the Creality Ender 3 in mind. It can be built with individually sourced parts, but it will be more difficult.
+## Repository Structure
+* `/CAD`: STEP and STL files for the machine and custom components.
+* `/Software`: Klipper configurations and legacy Marlin firmware.
+* `/Archive`: Legacy V1 designs and research notes.
 
 ## Getting Started
-
-&nbsp;	Follow along with our [documentation](https://docs.google.com/document/d/1JTzgc24gKuG1XwG2o0PW_RpvWWPIdiu-i3XqNWR1rMg/edit?usp=sharing) to learn how to build this project and more about the development of our pick and place machine. Included in our repo is a folder of our printable CAD STEP files as well as completed assembly. Further instructions for printing are included there.
-
-&nbsp;	Make sure to check out the OpenPnP [website](https://openpnp.org/) and their [GitHub](https://github.com/openpnp/openpnp) for a range of open-source pick-and-place projects and related information.
-
+1. Review the [Our Documentation](link) for the full build guide.
+2. Clone this repo to access the latest Klipper `printer.cfg`.
+3. Join the conversation on the [OSHE Website](link) and check out other OSHE projects at our [enterprise GitHub](https://github.com/OSHE-Github)
 
 
