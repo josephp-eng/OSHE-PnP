@@ -1,8 +1,10 @@
 # Pick and Place CAD Documentation
 
-<p align="center">
-  <img src="(https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/CompleteAssemblyV2.png?raw=true)" width="800" />
-</p>
+<div align="center">
+
+![Complete Assembly V2](OSHE-Pnp/Media/CompleteAssemblyV2.png)
+
+</div>
 
 This directory contains all mechanical design files for the OSHE Pick and Place project.
 
