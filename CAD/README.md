@@ -1,5 +1,9 @@
 # Pick and Place CAD Documentation
 
+<p align="center">
+  <img src="Media/CompleteAssemblyV2.png" alt="Complete Assembly V2" width="800">
+</p>
+
 This directory contains all mechanical design files for the OSHE Pick and Place project.
 
 Each subsystem is organized in the proceeding folders. Various STL and STEP files are available here for the current version of the pick and place machine.
