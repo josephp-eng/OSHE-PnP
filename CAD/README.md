@@ -32,7 +32,10 @@ Our system includes a nearly fully 3D printable toolhead, base structures, PCB c
     * `TOP_motor.step` and `TOP_motor_MIRROR.step`: Print one of each for the regular motor mount and mirrored motor structure
     * *OPTIONALLY* `BOT_leg_LP.step` and `BOT_leg_LP_MIRROR.step`:  Alternative leg models for a lower profile, shorter machine
 **/PneumaticEnclosure**: Housing for vacuum pump and solenoid
-    * WIP
+    * `BackFrontPanel.step`: Print two of these for the front and back sides
+    * `Baseplate.step`: Print one to build the base of the enclosure
+    * `Sidepanel.step`: Print two of these for the smallest sides of the enclosure
+    * `Top.step`: Print one of these for the top of the enclosure
 **/PushPullFeeder**: The Mark Maker, fully 3D printed tape and reel feeder (PETG)
     * `PushPullFeeder1.stl` and `PushPullFeeder2.stl`: Phase 1 and phase 2 of printing the feeder
     * `PushPullFeeder.scad`: The base code for the OpenSCAD model, venture if you dare
