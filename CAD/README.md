@@ -12,14 +12,43 @@ Our system includes a nearly fully 3D printable toolhead, base structures, PCB c
 
 ## Design Environment
 * Autodesk Fusion 360, Solidworks used for modeling and integration
-* All components exported to `.step` and `.stl` with Fusion 360 archives provided as `.f3d`
-* **Master File:** `PnP_Full_Assembly_V2.step`
+* All components exported to `.step` and `.stl`
+
+## V2 Directory
+* **/AxisSupport**: Supporting pieces for rolling Y-axis along X-axes
+    * `YAxisSupportA.step`: Mounts the Y-axis with rollers, featuring an end stop for alignment, for the side of the Y-motor (print one)
+    * `YAxisSupportB.step`: Mounts the Y-axis with rollers openly (print one)
+* **/Clamping**: PCB Clamping mechanism
+    * `ClampingAssembly.step`: Reference assembly of clamp
+    * `clampMount.step`, `clamp.step`, and `clampMountMirror.step`: Extrusion attachments for mount and clamping piece (print one of each)
+    * `THandle.step`, `TSlotShaftCollar.step`, and `TSlotSpacer.step`: Printable clamping components to tension PCB. Print two of each, acquiring two compression springs.
+* **/ElectricalEnclosure**: Housing for control board, raspberry pi, etc
+    * `EncAssembly.step`: Reference assembly of constructed enclosure
+    * Print one of each component in this folder. We utilized an Ender 3 fan and installed it on the back piece
+* **/Framing**: The PnP structure and axis mounts
+    * `BOT_leg.step` and `BOT_leg_MIRROR.step`: Print two of each to build idler, motor, mirrored idler, and mirrored motor structures, standard length
+    * `MID_leg.step`: Print four of these for each of the four structure assemblies
+    * `TOP_idler.step` and `TOP_idler_MIRROR.step`: Print one of each for the regular idler mount and mirrored idler structure
+    * `TOP_motor.step` and `TOP_motor_MIRROR.step`: Print one of each for the regular motor mount and mirrored motor structure
+    * *OPTIONALLY* `BOT_leg_LP.step` and `BOT_leg_LP_MIRROR.step`:  Alternative leg models for a lower profile, shorter machine
+**/PneumaticEnclosure**: Housing for vacuum pump and solenoid
+    * WIP
+**/PushPullFeeder**: The Mark Maker, fully 3D printed tape and reel feeder (PETG)
+    * `PushPullFeeder1.stl` and `PushPullFeeder2.stl`: Phase 1 and phase 2 of printing the feeder
+    * `PushPullFeeder.scad`: The base code for the OpenSCAD model, venture if you dare
+**/ToolHead**: Nearly fully 3D printable toolhead with Z rotation
+    * Print one of everything here
+    * Supports are absolutely necessary for many components
+    * `Prongs.step`: Print four of each of these for the 3D printed nozzle support, recommended in PETG for flexure
+    * `Tool_Head_Assembly.step`: Reference assembly of constructed toolhead
+* `PnP_Full_Assembly_V2.step`: **Master File** 
 
 ## Hardware Attribution
 We utilize and build upon the work of the open-source community:
 * **Push-Pull Feeder:** Designed by **Mark Maker**.
     * [Original Repository](https://github.com/markmaker/PushPullFeeder)
     * Our implementation includes optimization for use with 4040 v-slotted aluminum extrusion (commonly found on Ender 3), found in `/V2-Active/PushPullFeeder`.
+    * This feeder is pretty unreliable and in our testing we struggled to have it operate consistently with our current modifications.
 
 ## Fabrication Guide
 * **Material:** PETG (Motor mounts, Push Pull Feeder, Structural), PLA (Toolhead, PCB Clamping, Enclosures)
