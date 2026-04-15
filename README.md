@@ -1,6 +1,12 @@
 # OSHE Pick and Place Project (V2.0)
 *Michigan Technological University - Open Source Hardware Enterprise*
 
+<div align="center">
+
+![Physical Model](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/setup.jpg?raw=true)
+
+</div>
+
 The OSHE Pick and Place is a low-cost, Cartesian PCB assembly machine repurposed from Creality Ender 3 hardware.
 This project was designed to be made from a 3D printer, but can be built from individually sourced parts. Our platform was not designed with OpenPnP software in mind, but could be used with their system with some tuning.
 
