@@ -7,8 +7,8 @@ This project was designed to be made from a 3D printer, but can be built from in
 ## Project Status: V2.0 (Spring 2026)
 We are currently in Phase 2 of development, focusing on toolhead optimization and Klipper integration.
 * **Firmware:** Klipper (Active) | [Link to Configs](./Software/Klipper)
-* **Hardware:** Revised Toolhead V2.0 | [Link to CAD](./CAD/V2)
-* **Documentation:** [Live Google Doc Link]
+* **Hardware:** Revised Toolhead V2.0 | [Link to CAD](CAD)
+* **Documentation:** [Live Google Doc](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing)
 
 ## Repository Structure
 * `/CAD`: STEP and STL files for the machine and custom components.
@@ -16,8 +16,8 @@ We are currently in Phase 2 of development, focusing on toolhead optimization an
 * `/Archive`: Legacy V1 designs and research notes.
 
 ## Getting Started
-1. Review the [Our Documentation](link) for the full build guide.
+1. Review the [Our Documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing) for the full build guide.
 2. Clone this repo to access the latest Klipper `printer.cfg`.
-3. Join the conversation on the [OSHE Website](link) and check out other OSHE projects at our [enterprise GitHub](https://github.com/OSHE-Github)
+3. Join the conversation on the [OSHE Website]([link](https://oshe.io/)) and check out other OSHE projects at our [enterprise GitHub](https://github.com/OSHE-Github)
 
 
