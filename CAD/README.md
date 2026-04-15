@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Complete Assembly V2](OSHE-Pnp/Media/CompleteAssemblyV2.png)
+![Complete Assembly V2](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/CompleteAssemblyV2.png?raw=true)
 
 </div>
 
