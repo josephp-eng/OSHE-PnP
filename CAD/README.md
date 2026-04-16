@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Complete Assembly V2](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/SquareRender.png?raw=true)
+![Complete Assembly V2](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/SquareRender.PNG)
 
 </div>
 
