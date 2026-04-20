@@ -1,0 +1,39 @@
+#,Part Name,Qty,Used In
+1,Aluminum Extrusion 4040 - 290mm,2,Frame Assembly
+2,Aluminum Extrusion 2040 - 400mm,2,Frame Assembly
+3,Aluminum Extrusion 2020 - 345mm,1,"Frame, Y-Axis Assembly"
+4,M5 x 45mm Screws / SHCS,3,Tool Head
+5,M5 x 30mm Pan Head Screws,9,Y-Axis Assembly
+6,M5 x 20mm Socket Head Bolts,16,Frame Assembly
+7,M5 x 16mm Socket Head Bolts,4,Frame Assembly
+8,M5 x 0.8 x 8mm Hex SHCS,8,PCB Clamps
+9,M5 T-Slot Nut,2,Y-Axis Assembly
+10,M5 T-Nuts,8,PCB Clamps
+11,M5 Self-Locking Nut / Lock Nut,12,"Y-Axis (9), Tool Head (3)"
+12,M4 x 10mm Socket Head Bolt,4,Electrical Enclosure
+13,M4 x 8mm Socket Head Bolt,2,Electrical Enclosure
+14,M4 x 16mm Button Head Bolt,2,Y-Axis Assembly
+15,M4 Hexagon Nut,6,Electrical Enclosure
+16,M4 Locknuts,2,Frame Assembly
+17,M4 T-Slot Nut,2,Y-Axis Assembly
+18,M3 x 16mm Socket Head Bolt,8,Electrical Enclosure
+19,M3 x 16mm Buttonhead Screws,8,Frame Assembly
+20,M3 x 8mm Screws,20,Pneumatic Enclosure
+21,M3 x 8mm Pan Head Screw,4,Electrical Enclosure (HMI)
+22,M3 x 6mm Screws,8,Tool Head
+23,M3 x 10mm Buttonhead Bolt,4,Y-Axis Assembly
+24,M3 x 15mm Screws,2,Tool Head
+25,M3 x 25mm Screws,4,Tool Head
+26,M3 Hexagon Nut / Nut,12,"Electrical (8), Pneumatic (4)"
+27,M3 Heat Set Inserts,22,"Pneumatic (16), Tool Head (6)"
+28,M3 Set Screw,4,Tool Head
+29,M2.5 x 10mm Socket Head Bolt,4,Electrical Enclosure
+30,M2.5 Hexagon Nut,4,Electrical Enclosure
+31,V-Slot / Ender 3 Rollers,9,Y-Axis Assembly
+32,Ender 3 Roller Spacers,9,Y-Axis Assembly
+33,NEMA 17 Stepper Motors,5,"Frame (2), Tool Head (2), Y-Axis (1)"
+34,E-Stop Button,1,Electrical Enclosure
+35,Vacuum Pump,1,Pneumatic Enclosure
+36,Solenoid Valve (NC),1,Pneumatic Enclosure
+37,Raspberry Pi 5,1,Electrical Enclosure
+38,OctoPro V1 Board,1,Electrical Enclosure

@@ -1,0 +1,29 @@
+#,Category,Fastener Name,Total Qty.,Assembly Source
+1,Socket Head,M5 x 20mm Socket Head Bolt,16,Frame
+2,,M5 x 16mm Socket Head Bolt,4,Frame
+3,,M5 x 0.8 x 8mm Hex Socket Head Cap Screw,8,PCB Clamps
+4,,M5 x 45mm Socket Head Bolt (Screws),3,Tool Head
+5,,M4 x 10mm Socket Head Bolt,4,Electrical Enclosure
+6,,M4 x 8mm Socket Head Bolt,2,Electrical Enclosure
+7,,M3 x 16mm Socket Head Bolt,8,Electrical Enclosure
+8,,M2.5 x 10mm Socket Head Bolt,4,Electrical Enclosure
+9,Button Head,M3 x 16mm Buttonhead Screw,8,Frame
+10,,M3 x 10mm Buttonhead Bolt,4,Y-Axis
+11,,M4 x 16mm Buttonhead Bolt,2,Y-Axis
+12,Pan Head,M5 x 30mm Pan Head Screw,9,Y-Axis
+13,Nuts & Locking,M5 Self-Locking Nut / Lock Nut,12,"Y-Axis (9), Tool Head (3)"
+14,,M4 Hexagon Nut,6,Electrical Enclosure
+15,,M4 Locknut,2,Frame
+16,,M3 Hexagon Nut / Nut,12,"Electrical (8), Pneumatic (4)"
+17,,M3 Lock Nut (3M),4,Tool Head
+18,,M2.5 Hexagon Nut,4,Electrical Enclosure
+19,Inserts & Specialized,M3 Heat Set Insert (incl. 3M),22,"Pneumatic (16), Tool Head (6)"
+20,,M5 T-Nut / T-Slot Nut,10,"PCB Clamps (8), Y-Axis (2)"
+21,,M4 T-Slot Nut,2,Y-Axis
+22,,M5 x 20mm Shoulder Bolt (M4 thread),2,Frame
+23,,M3 Set Screw,4,Tool Head
+24,Other / Small,M3 x 8mm Screw,20,Pneumatic Enclosure
+25,,M3 x 6mm Screw,8,Tool Head
+26,,M3 x 15mm Screw,2,Tool Head
+27,,M3 x 25mm Screw,4,Tool Head
+28,,#8 x 0.5in Screw,2,Pneumatic Enclosure
