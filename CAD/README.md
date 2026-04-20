@@ -2,14 +2,14 @@
 
 <div align="center">
 
-![Complete Assembly V2](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/SquareRender.PNG)
+![Complete Assembly V2](https://github.com/josephp-eng/OSHE-PnP/blob/main/Media/CompleteAssembly.PNG?raw=true)
 
 </div>
 
 This directory contains all mechanical design files for the OSHE Pick and Place project.
 
-Each subsystem is organized in the proceeding folders. Various STL and STEP files are available here for the current version of the pick and place machine.
-Our system includes a nearly fully 3D printable toolhead, base structures, PCB clamping, pneumatic and electrical enclosure, and modified Push Pull Feeder from Mark Maker.
+Each subsystem is organized in the preceding folders. Various STL and STEP files are available here for the current version of the pick-and-place machine.
+Our system includes a nearly fully 3D-printable toolhead, base structures, PCB clamping, pneumatic and electrical enclosures, and a modified Push Pull Feeder from Mark Maker.
 
 ## Folder Structure
 * **/V1-Legacy**: Baseline Ender 3 conversion (Fall 2025).
@@ -17,18 +17,18 @@ Our system includes a nearly fully 3D printable toolhead, base structures, PCB c
 * `Ender-3-Full-Assembly.step`: Reference model for Ender 3 3D printer.
 
 ## Design Environment
-* Autodesk Fusion 360, Solidworks used for modeling and integration
+* Autodesk Fusion 360 and Solidworks are used for modeling and integration
 * All components exported to `.step` and `.stl`
 
 ## V2 Directory
-* **/AxisSupport**: Supporting pieces for rolling Y-axis along X-axes
+* **/AxisSupport**: Supporting pieces for rolling the Y-axis along the X-axis
     * `YAxisSupportA.step`: Mounts the Y-axis with rollers, featuring an end stop for alignment, for the side of the Y-motor (print one)
     * `YAxisSupportB.step`: Mounts the Y-axis with rollers openly (print one)
 * **/Clamping**: PCB Clamping mechanism
-    * `ClampingAssembly.step`: Reference assembly of clamp
+    * `ClampingAssembly.step`: Reference assembly of the clamp
     * `clampMount.step`, `clamp.step`, and `clampMountMirror.step`: Extrusion attachments for mount and clamping piece (print one of each)
     * `THandle.step`, `TSlotShaftCollar.step`, and `TSlotSpacer.step`: Printable clamping components to tension PCB. Print two of each, acquiring two compression springs.
-* **/ElectricalEnclosure**: Housing for control board, raspberry pi, etc
+* **/ElectricalEnclosure**: Housing for control board, Raspberry Pi, etc
     * `EncAssembly.step`: Reference assembly of constructed enclosure
     * Print one of each component in this folder. We utilized an Ender 3 fan and installed it on the back piece
 * **/Framing**: The PnP structure and axis mounts
@@ -57,12 +57,12 @@ We utilize and build upon the work of the open-source community:
 * **Push-Pull Feeder:** Designed by **Mark Maker**.
     * [Original Repository](https://github.com/markmaker/PushPullFeeder)
     * Our implementation includes optimization for use with 4040 v-slotted aluminum extrusion (commonly found on Ender 3), found in `/V2-Active/PushPullFeeder`.
-    * This feeder is pretty unreliable and in our testing we struggled to have it operate consistently with our current modifications.
+    * This feeder is pretty unreliable, and in our testing, we struggled to have it operate consistently with our current modifications.
 
 ## Fabrication Guide
 * **Material:** PETG (Motor mounts, Push Pull Feeder, Structural), PLA (Toolhead, PCB Clamping, Enclosures)
 *Our Pick and Place structures can be printed in either PETG or PLA, but PETG is preferred*
 * **Minimal Settings:** 0.2mm layer height, 2+ perimeters, 12% Gyroid infill, tree supports recommended
-*The Push Pull Feeder is recommended by Mark Maker to be printed with more specific settings. See attributed repository for more information.*
+*The Push Pull Feeder is recommended by Mark Maker to be printed with more specific settings. See the attributed repository for more information.*
 * **Hardware:** Our compoennts were printed and verified across the **Bambu Lab A1** and **Prusa Core 1** platforms with their respective slicers.
     * Standard 0.4mm nozzle recommended
