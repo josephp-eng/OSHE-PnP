@@ -40,6 +40,15 @@ ambient_subtract = false        # also grab a light-off frame and subtract it
 keep_on = false                 # true = never switch (saves ~settle_s per inspection)
 search_radius_mm = 6.0          # how far from the nozzle axis to look for the part
 
+[rotation]
+stepper = "toolhead_rotation"   # [manual_stepper toolhead_rotation] in printer.cfg (units = degrees)
+# Software limit on Klipper's angle for this stepper. There is no endstop, so 0 = wherever the
+# nozzle was at Klipper start. The LumenPnP head has a rotary pneumatic fitting, so the vacuum
+# hose should NOT wind up; the wide range below is just a sanity guard. Tighten it if anything
+# on your head (wiring, a hose without a rotary fitting) can wind up.
+range_deg = [-3600.0, 3600.0]
+symmetry_deg = 180.0            # 180 = a part looks the same turned 180 deg (resistors, caps)
+
 [log]
 db = "pnp_events.sqlite"
 
