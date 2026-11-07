@@ -1,7 +1,8 @@
 # (WIP) OSHE Pick and Place (V3.0)
 
 ![Project Status](https://img.shields.io/badge/Status-Work_in_Progress-yellow)
-![License](https://img.shields.io/badge/License-GNU%20GPL%20v3-blue)
+![Software License](https://img.shields.io/badge/Software-GNU%20GPL%20v3-blue)
+![Hardware License](https://img.shields.io/badge/Hardware-CERN--OHL--S%20v2-green)
 ![Platform](https://img.shields.io/badge/Platform-Klipper-orange)
 
 <div align="center">
@@ -27,7 +28,7 @@ The modern V3 system draws heavy inspiration in its CoreXY motion system from th
 
 ### 📈 Current Project Status
 
-The Fall 2026 revision (V3.0) has is the current work in progress iteration. 
+The Fall 2026 revision (V3.0) is the current work-in-progress iteration. 
 This project currently exists separately from the OpenPnP architecture. It was not designed around their software suite but could possibly be adapted.
 
 ---
@@ -52,11 +53,30 @@ This project currently exists separately from the OpenPnP architecture. It was n
 * `/BOMs`: Subsystem bills of materials, including hardware and 3D printed components.
 
 ## 💻 Getting Started
-1. Review the [Our Documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing) for the full build guide. Follow along with the 3D printing settings outlined in [CAD]([link](https://github.com/OSHE-Github/OSHE-PnP/tree/main/CAD))
+1. Review [our documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing) for the full build guide. Follow along with the 3D printing settings outlined in [CAD](https://github.com/OSHE-Github/OSHE-PnP/tree/main/CAD).
 2. Clone this repo to access the latest Klipper `printer.cfg`.
-3. Join the conversation on the [OSHE Website]((https://oshe.io/)) and check out other OSHE projects at our [enterprise GitHub](https://github.com/OSHE-Github)
+3. Join the conversation on the [OSHE Website](https://oshe.io/) and check out other OSHE projects at our [enterprise GitHub](https://github.com/OSHE-Github).
 
-## Project Sponsors
+## 🤝 Project Sponsors
+
+---
+
+## ⚖️ License
+
+Every file in this repository is covered by one of the licenses below.
+
+### LICENSE-SOFTWARE (GNU GPL v3)
+All source code, firmware, scripts, and configuration files anywhere in this repository, including `/Software` and any code in `/Archive`, are licensed under the [GNU General Public License v3.0](LICENSE-SOFTWARE).
+
+The firmware in `/Software/Legacy-Marlin` is based on [Marlin](https://github.com/MarlinFirmware/Marlin) (© Marlin Firmware contributors, GPL v3). Our modifications to it are also released under GPL v3.
+
+### LICENSE-HARDWARE (CERN-OHL-S v2)
+All hardware design files and documentation anywhere in this repository, including `/CAD`, `/BOMs`, hardware in `/Archive`, and this README, are licensed under the [CERN Open Hardware Licence Version 2 – Strongly Reciprocal](LICENSE-HARDWARE).
+
+### Media (CC BY-SA 4.0)
+Photos, renders, and other images, including everything in `/Media`, are licensed under [Creative Commons Attribution-ShareAlike 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
+Any file not clearly covered above falls under CERN-OHL-S v2.
 
 ---
 *Developed under the Michigan Technological University Open Source Hardware Enterprise (OSHE)*
