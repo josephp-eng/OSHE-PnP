@@ -1,106 +1,121 @@
 #!/usr/bin/env python3
 """
-Thank you Claude
+ChArUco capture + OpenCV calibration for the PnP down camera (headless Pi).
 
-USB camera preview + checkerboard capture for OpenCV calibration.
+Grabs stills from the crowsnest snapshot URL instead of opening the camera
+directly, so crowsnest keeps running and you can aim the board using the live
+Mainsail webcam view in your browser.
 
-Board: 8 x 11 squares, 15 mm each  ->  7 x 10 INNER corners.
-(OpenCV counts inner corners, i.e. squares - 1 in each direction.)
+Workflow:
+  1. Open the live stream in a browser (http://<pi-ip>/) to aim the board.
+  2. Jog the toolhead over the board; vary tilt and position every shot.
+  3. In this script's terminal:
+        <Enter>  capture a still (saved only if enough ChArUco corners found)
+        k        calibrate from everything captured this run
+        q        quit
+  4. Open captures/<name>/annotated/*.png in VS Code to verify detections.
 
-Keys (click the preview window first so it has focus):
-    SPACE / c : capture a frame (only saved if the checkerboard is detected)
-    k         : run calibration on this run's captures (shows tracked corners)
-    q / ESC   : quit
+Board (from the calibrx.io generator):
+  7 x 5 squares, 8 mm squares, 6 mm markers, DICT_6X6_250, start id 0.
+After printing, replace the sizes below with what you MEASURE with calipers.
 
-Usage:
-    python calib_capture.py                 # camera 0, new timestamped run folder
-    python calib_capture.py --name cam_A    # captures/cam_A/ (re-running resumes it)
-    python calib_capture.py --camera 1      # a different camera
-    python calib_capture.py --width 1280 --height 720 --fps 30
+Needs OpenCV 4.7+ (uses cv2.aruco.CharucoDetector). Check with:
+    python3 -c "import cv2; print(cv2.__version__)"
 """
 
 import argparse
 import glob
 import os
 import time
+import urllib.request
 
 import cv2
 import numpy as np
 
-# ---- Board configuration ---------------------------------------------------
-SQUARES_X, SQUARES_Y = 8, 11                       # squares on the printed board
-PATTERN_SIZE = (SQUARES_X - 1, SQUARES_Y - 1)      # inner corners: (7, 10)
-SQUARE_SIZE_MM = 15.0
+# ---- Board configuration (match your printed board) ------------------------
+SQUARES_X, SQUARES_Y = 7, 5          # squares, not inner corners
+SQUARE_SIZE_MM = 8.0                 # measure the printed square with calipers
+MARKER_SIZE_MM = 6.0                 # measure the printed marker with calipers
+ARUCO_DICT = cv2.aruco.DICT_6X6_250
+LEGACY_BOARD = False                 # flip to True if corners won't detect
 # ----------------------------------------------------------------------------
 
-CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-
-def find_corners(gray):
-    """Detect checkerboard corners with sub-pixel refinement. Returns (found, corners)."""
-    flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
-    found, corners = cv2.findChessboardCorners(gray, PATTERN_SIZE, flags)
-    if found:
-        corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), CRITERIA)
-    return found, corners
+MIN_CORNERS = 8                      # min ChArUco corners to keep/use a frame
 
 
-def calibrate(image_dir):
-    """Run cv2.calibrateCamera on all images in image_dir."""
-    paths = sorted(glob.glob(os.path.join(image_dir, "*.png")))
+def make_board():
+    dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
+    board = cv2.aruco.CharucoBoard(
+        (SQUARES_X, SQUARES_Y), SQUARE_SIZE_MM, MARKER_SIZE_MM, dictionary
+    )
+    if LEGACY_BOARD:
+        board.setLegacyPattern(True)
+    return board, dictionary
+
+
+def grab(url):
+    """Fetch one JPEG snapshot and decode to BGR. Returns frame or None."""
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            data = r.read()
+    except Exception as e:
+        print(f"  snapshot fetch failed: {e}")
+        return None
+    frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        print("  could not decode snapshot (is the URL serving a JPEG?)")
+    return frame
+
+
+def annotate(frame, cc, ci, mc, mi):
+    vis = frame.copy()
+    if mi is not None and len(mi) > 0:
+        cv2.aruco.drawDetectedMarkers(vis, mc, mi)
+    if ci is not None and len(ci) > 0:
+        cv2.aruco.drawDetectedCornersCharuco(vis, cc, ci, (0, 0, 255))
+    return vis
+
+
+def calibrate(image_dir, board, detector):
+    paths = sorted(glob.glob(os.path.join(image_dir, "capture_*.png")))
     if len(paths) < 5:
-        print(f"Need at least ~5 captures (preferably 15-25); found {len(paths)}.")
+        print(f"Need ~5+ captures (15-25 is better); found {len(paths)}.")
         return
 
-    # 3D points of the board corners, in mm, Z = 0
-    objp = np.zeros((PATTERN_SIZE[0] * PATTERN_SIZE[1], 3), np.float32)
-    objp[:, :2] = np.mgrid[0:PATTERN_SIZE[0], 0:PATTERN_SIZE[1]].T.reshape(-1, 2)
-    objp *= SQUARE_SIZE_MM
-
-    annotated_dir = os.path.join(image_dir, "annotated")
-    os.makedirs(annotated_dir, exist_ok=True)
-
-    obj_points, img_points = [], []
-    img_size = None
+    all_obj, all_img, img_size, used = [], [], None, 0
     for p in paths:
         img = cv2.imread(p)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         img_size = gray.shape[::-1]
-        found, corners = find_corners(gray)
-        if found:
-            obj_points.append(objp)
-            img_points.append(corners)
-            # Show the tracked inner corners for this image
-            vis = img.copy()
-            cv2.drawChessboardCorners(vis, PATTERN_SIZE, corners, found)
-            cv2.putText(vis, os.path.basename(p), (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
-            cv2.imshow("Calibration corners", vis)
-            cv2.imwrite(os.path.join(annotated_dir, os.path.basename(p)), vis)
-            cv2.waitKey(400)  # ~0.4 s per image; press any key to skip ahead
+        cc, ci, mc, mi = detector.detectBoard(gray)
+        n = 0 if ci is None else len(ci)
+        if n >= MIN_CORNERS:
+            obj, imgp = board.matchImagePoints(cc, ci)
+            if obj is not None and len(obj) >= 6:
+                all_obj.append(obj)
+                all_img.append(imgp)
+                used += 1
         else:
-            print(f"  skipped (no corners): {p}")
+            print(f"  skipped ({n} corners): {os.path.basename(p)}")
 
-    if len(obj_points) < 5:
-        print("Too few usable images for calibration.")
+    if used < 5:
+        print(f"Only {used} usable images; capture more varied views.")
         return
 
     rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(
-        obj_points, img_points, img_size, None, None
+        all_obj, all_img, img_size, None, None
     )
 
-    cv2.destroyWindow("Calibration corners")
-
-    # Mean reprojection error
     total = 0.0
-    for i in range(len(obj_points)):
-        proj, _ = cv2.projectPoints(obj_points[i], rvecs[i], tvecs[i], K, dist)
-        total += cv2.norm(img_points[i], proj, cv2.NORM_L2) / len(proj)
-    mean_err = total / len(obj_points)
+    for i in range(len(all_obj)):
+        proj, _ = cv2.projectPoints(all_obj[i], rvecs[i], tvecs[i], K, dist)
+        total += cv2.norm(all_img[i], proj, cv2.NORM_L2) / len(proj)
+    mean_err = total / len(all_obj)
 
     print("\n=== Calibration result ===")
-    print(f"Images used:        {len(obj_points)}")
+    print(f"Images used:        {used} of {len(paths)}")
     print(f"Image size:         {img_size}")
-    print(f"RMS error:          {rms:.4f} px")
+    print(f"RMS error:          {rms:.4f} px   (aim for < ~0.5-1.0)")
     print(f"Mean reproj. error: {mean_err:.4f} px")
     print(f"Camera matrix:\n{K}")
     print(f"Distortion coeffs:\n{dist.ravel()}")
@@ -113,73 +128,55 @@ def calibrate(image_dir):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--camera", type=int, default=0, help="camera index")
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--url", default="http://localhost/webcam/?action=snapshot",
+                    help="crowsnest snapshot URL (try /webcam2/ for the other cam)")
     ap.add_argument("--name", default=None,
-                    help="run name (default: timestamp). Output goes to captures/<name>/")
+                    help="run name (default: timestamp); re-running resumes it")
     args = ap.parse_args()
+
+    if tuple(map(int, cv2.__version__.split(".")[:2])) < (4, 7):
+        print(f"OpenCV {cv2.__version__} is < 4.7; this script uses the newer "
+              "ChArUco API. Tell me your version and I'll adapt it.")
+        return
+
+    board, _ = make_board()
+    detector = cv2.aruco.CharucoDetector(board)
 
     run_name = args.name or time.strftime("run_%Y%m%d_%H%M%S")
     out_dir = os.path.join("captures", run_name)
     os.makedirs(out_dir, exist_ok=True)
-    count = len(glob.glob(os.path.join(out_dir, "*.png")))
+    count = len(glob.glob(os.path.join(out_dir, "capture_*.png")))
+
     print(f"Run folder: {out_dir}")
-
-    cap = cv2.VideoCapture(args.camera)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.height)
-    cap.set(cv2.CAP_PROP_FPS, args.fps)
-    if not cap.isOpened():
-        raise SystemExit(f"Could not open camera {args.camera}")
-
-    actual = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-    print(f"Camera resolution: {actual[0]}x{actual[1]}")
-    print("SPACE/c = capture | k = calibrate | q/ESC = quit")
-    print("Keep the same resolution for every capture and for later use.")
-
-    win = "Calibration capture"
-    flash_until = 0.0
-    message = ""
+    print(f"Snapshot:   {args.url}")
+    print("Aim with the live stream in your browser, then here:")
+    print("  <Enter> capture | k calibrate | q quit\n")
 
     while True:
-        ok, frame = cap.read()
-        if not ok:
-            print("Failed to read frame")
+        cmd = input(f"[{count} saved] > ").strip().lower()
+        if cmd == "q":
             break
-
-        # Plain preview, no overlay
-        display = frame.copy()
-        cv2.putText(display, f"saved: {count}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 0), 2)
-        if time.time() < flash_until:
-            cv2.putText(display, message, (10, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 200, 0), 2)
-
-        cv2.imshow(win, display)
-        key = cv2.waitKey(1) & 0xFF
-
-        if key in (ord("q"), 27):
-            break
-        elif key in (ord(" "), ord("c")):
-            # Only keep frames where the board is detected
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            found_full, _ = find_corners(gray)
-            if found_full:
-                count += 1
-                path = os.path.join(out_dir, f"capture_{count:03d}.png")
-                cv2.imwrite(path, frame)
-                message = f"Saved {path}"
-            else:
-                message = "Not saved: board not found"
-            print(message)
-            flash_until = time.time() + 1.5
-        elif key == ord("k"):
-            calibrate(out_dir)
-
-    cap.release()
-    cv2.destroyAllWindows()
+        if cmd == "k":
+            calibrate(out_dir, board, detector)
+            continue
+        frame = grab(args.url)
+        if frame is None:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        cc, ci, mc, mi = detector.detectBoard(gray)
+        n = 0 if ci is None else len(ci)
+        if n >= MIN_CORNERS:
+            count += 1
+            raw = os.path.join(out_dir, f"capture_{count:03d}.png")
+            cv2.imwrite(raw, frame)
+            ann_dir = os.path.join(out_dir, "annotated")
+            os.makedirs(ann_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(ann_dir, f"capture_{count:03d}.png"),
+                        annotate(frame, cc, ci, mc, mi))
+            print(f"  saved {raw}  ({n} corners)")
+        else:
+            print(f"  not saved: only {n} corners (need {MIN_CORNERS}); "
+                  "reposition / check focus / try LEGACY_BOARD")
 
 
 if __name__ == "__main__":
