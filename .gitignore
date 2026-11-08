@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+
+# Live Pi config copies: never commit credentials or backups
+Software/Klipper/from-pi/moonraker-obico*.cfg
+Software/Klipper/from-pi/.moonraker.conf.bkp
+Software/Klipper/from-pi/*.zip
+Software/Klipper/from-pi/*.conf.20*

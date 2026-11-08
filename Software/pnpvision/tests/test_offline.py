@@ -13,12 +13,122 @@ CAL = os.path.join(os.path.dirname(os.path.dirname(__file__)), "calibration")
 
 
 def test_lens_loads_and_undistorts():
-    for f in ("calibration_cam_A.npz", "calibration_cam_b.npz"):
+    for f, size in (("calibration_cam_down.npz", (1920, 1080)), ("calibration_cam_up.npz", (1280, 720))):
         lens = LensModel(os.path.join(CAL, f))
-        assert lens.size == (1280, 720)
-        out = lens.undistort(np.full((720, 1280, 3), 128, np.uint8))
-        assert out.shape == (720, 1280, 3)
+        assert lens.size == size
+        out = lens.undistort(np.full((size[1], size[0], 3), 128, np.uint8))
+        assert out.shape == (size[1], size[0], 3)
         print(f, lens.health())
+
+
+def test_safe_travel_height():
+    """Larger Z = lower nozzle. XY moves must lift to safe_travel_z first; Z goes down last."""
+    from pnpvision.moonraker import Moonraker, MoveRefused
+
+    class Fake(Moonraker):
+        def __init__(self, pos, **kw):
+            super().__init__(x_range=(0, 235), y_range=(0, 343), z_range=(0, 60), **kw)
+            self.pos, self.sent = list(pos), []
+        def status(self, obj="toolhead"):
+            return {"position": self.pos + [0.0], "homed_axes": "xyz"}
+        def gcode(self, script):
+            self.sent.append(script)
+            for line in script.splitlines():
+                for w in line.split()[1:] if line.startswith("G1") else []:
+                    if w[0] in "XYZ":
+                        self.pos["XYZ".index(w[0])] = float(w[1:])
+
+    lines = lambda m: [l for s in m.sent for l in s.splitlines() if l.startswith("G1")]
+
+    m = Fake([50, 50, 45.0], safe_travel_z=30.0)          # nozzle low (near the plate)
+    m.move_rel(5, 0)
+    assert lines(m)[0].startswith("G1 Z30"), lines(m)     # lifted first...
+    assert lines(m)[1].startswith("G1 X55"), lines(m)     # ...then moved sideways
+    assert m.pos == [55, 50, 30.0]
+
+    m = Fake([50, 50, 10.0], safe_travel_z=30.0)          # already high: no extra Z move
+    m.move_rel(0, 3)
+    assert lines(m) == ["G1 Y53.0000 F3000"], lines(m)
+
+    m = Fake([50, 50, 10.0], safe_travel_z=30.0)          # XY then descend, never diagonal
+    m.move_abs(x=80, y=60, z=38)
+    assert lines(m) == ["G1 X80.0000 Y60.0000 F3000", "G1 Z38.0000 F3000"], lines(m)
+
+    m = Fake([50, 50, 45.0], safe_travel_z=30.0)          # pure Z move: no lift needed
+    m.move_abs(z=48)
+    assert lines(m) == ["G1 Z48.0000 F3000"], lines(m)
+
+    try:
+        Fake([50, 50, 10.0], safe_travel_z=30.0).move_abs(x=300)
+        raise AssertionError("out-of-range X accepted")
+    except MoveRefused:
+        pass
+
+
+def test_down_light_switched_on_when_opened():
+    """open_cam('down') must run VISION_LIGHT_ON (from config.toml) before the camera starts."""
+    from pnpvision import cli, config as C
+    cfg = C.load(os.path.join(os.path.dirname(CAL), "config.toml"))
+    events = []
+
+    class FakeMR:
+        def gcode(self, script):
+            events.append(("gcode", script))
+
+    class FakeCam:
+        def __init__(self, url, w, h, name): self.name = name
+        def start(self):
+            events.append(("camera", self.name)); return self
+
+    real_mr, real_cam, real_sleep = cli.make_mr, cli.SnapshotCamera, cli.time.sleep
+    cli.make_mr, cli.SnapshotCamera, cli.time.sleep = (lambda cfg: FakeMR()), FakeCam, (lambda s: None)
+    try:
+        cli.open_cam(cfg, "down")
+        assert events[0] == ("gcode", "VISION_LIGHT_ON\nM400"), events
+        assert events[1] == ("camera", "down"), events
+        events.clear()
+        cli.open_cam(cfg, "up")                       # up light not wired: no G-code at all
+        assert events == [("camera", "up")], events
+    finally:
+        cli.make_mr, cli.SnapshotCamera, cli.time.sleep = real_mr, real_cam, real_sleep
+
+
+def test_snapshot_camera_waits_for_a_new_frame():
+    """Fake ustreamer: the cached frame only changes every 100 ms. fresh() must return a
+    frame whose timestamp is newer than the one cached when it was called."""
+    import http.server, threading, time
+    from pnpvision.camera import SnapshotCamera
+    state = {"t0": time.monotonic()}
+
+    def current():
+        n = int((time.monotonic() - state["t0"]) / 0.1)          # frame number, 10 fps
+        img = np.full((72, 128, 3), n % 250, np.uint8)
+        return cv2.imencode(".jpg", img)[1].tobytes(), n
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            data, n = current()
+            self.send_response(200); self.send_header("Content-Type", "image/jpeg")
+            self.send_header("X-Timestamp", f"{n * 0.1:.6f}"); self.end_headers()
+            self.wfile.write(data)
+        def log_message(self, *a): pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/webcam/?action=snapshot"
+        cam = SnapshotCamera(url, 128, 72, name="fake").start()
+        for _ in range(3):
+            _, before = current()
+            f = cam.fresh(settle_s=0.0)
+            assert int(f[0, 0, 0]) > before, "returned the frame that was cached before the call"
+        try:
+            SnapshotCamera(url, 1920, 1080, name="fake").start()
+            raise AssertionError("resolution mismatch was not caught")
+        except RuntimeError as e:
+            assert "1920x1080" in str(e)
+    finally:
+        srv.shutdown()
 
 
 class World:

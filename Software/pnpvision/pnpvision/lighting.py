@@ -76,6 +76,17 @@ class KlipperLed(Light):
         self.mr.gcode(" ".join(parts) + "\nM400")
 
 
+class KlipperMacro(Light):
+    """Light switched by printer.cfg macros, e.g. VISION_LIGHT_ON / VISION_LIGHT_OFF."""
+    def __init__(self, mr, on_macro, off_macro=None):
+        self.mr, self.on_macro, self.off_macro = mr, on_macro, off_macro
+
+    def _set(self, state):
+        macro = self.on_macro if state else self.off_macro
+        if macro:
+            self.mr.gcode(f"{macro}\nM400")
+
+
 class GpioLight(Light):
     """Light driven directly from a Pi GPIO (BCM number) through a MOSFET. Needs gpiozero."""
     def __init__(self, bcm_pin, level=1.0):
@@ -96,6 +107,8 @@ def make_light(section, mr=None):
         return KlipperPin(mr, section["name"], level)
     if kind == "klipper_led":
         return KlipperLed(mr, section["name"], level, section.get("white", False), section.get("index"))
+    if kind == "klipper_macro":
+        return KlipperMacro(mr, section["on_macro"], section.get("off_macro"))
     if kind == "gpio":
         return GpioLight(section["name"], level)
     raise ValueError(f"unknown lighting type {kind!r}")

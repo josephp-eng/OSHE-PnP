@@ -6,7 +6,7 @@ This directory contains the tools used to calibrate the PnP's USB cameras and re
 * **Function:** Capture ChArUco board images from a camera on the Raspberry Pi, compute an OpenCV calibration (`.npz`), and optionally serve an undistorted live view to the Mainsail dashboard.
 * **Cameras:**
     * **Down camera:** Arducam 12MP USB (M12 manual-focus lens), mounted on the toolhead gantry. **Calibrated.**
-    * **Up camera:** InnoMaker 720P USB, 120° DFOV, mounted on the staging plate. Not calibrated yet.
+    * **Up camera:** InnoMaker 720P USB, 120° DFOV, mounted on the staging plate. **Calibrated.**
 * **Status:** **Optional.** The PnP works without it, but camera calibration improves vision accuracy.
 
 ## ⚠️ Why is this archived?
@@ -15,10 +15,12 @@ This utility is only useful to advanced users and needs a specific setup. Unders
 ## 📂 Contents
 * `calib_capture.py`: Capture and calibration program. Runs headless on the Pi.
 * `undistort_stream.py`: Optional service that re-serves a camera stream undistorted, for viewing in Mainsail.
-* **/captures**: Each run keeps its calibration `.npz` plus a few sample shots. The full capture sets stay on the Pi and in git history.
-    * **/cam_down**: `calibration_cam_down.npz` and sample captures (001 flat, 015 flat, 030 tilted)
-        * **/annotated**: Samples with the detected markers and ChArUco corners drawn on them
-    * **/cam_A**, **/cam_b**: Legacy runs from an older checkerboard version of the script (ELP cameras)
+* **/captures**: Each camera keeps its calibration `.npz` plus a few sample shots. The full capture sets stay on the Pi (`~/calib/captures/`).
+    * **/cam_down**: Down camera. `calibration_cam_down.npz` and samples 001 (flat), 015 (flat), 030 (tilted)
+        * **/annotated**: The samples with the detected markers and ChArUco corners drawn on them
+    * **/cam_up**: Up camera. `calibration_cam_up.npz` and samples 001, 012, 025
+        * **/annotated**: The samples with detections drawn on them
+* The active copies of both `.npz` files live in `Software/pnpvision/calibration/`. After recalibrating, copy the new file there too.
 
 ## 🔁 Pipeline
 ```
@@ -55,6 +57,10 @@ On the Pi, inside `tmux`:
 ```bash
 cd ~/calib && ./venv/bin/python calib_capture.py --name cam_down
 ```
+Up camera (crowsnest camera 2):
+```bash
+cd ~/calib && ./venv/bin/python calib_capture.py --name cam_up --url "http://localhost/webcam2/?action=snapshot"
+```
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -88,6 +94,16 @@ Tunable constants at the top of the script: `MIN_CORNERS` (8), `OUTLIER_FACTOR` 
 | Principal point | (902, 626) |
 
 The **focal length (~732 px) is not reliable.** It can't be determined from near-straight-down views when the camera has no Z travel. For a camera that always looks at one fixed plane, only the distortion and principal point matter, so the pixel correction is unaffected. Recapturing with a rigidly mounted board should roughly halve the RMS.
+
+### Up camera result (`cam_up`, 1280x720)
+| Value | Result |
+|---|---|
+| Images used | 24 of 25 (1 blurry shot auto-dropped) |
+| RMS | 1.64 px, about 0.044 mm (about 0.027 mm per pixel at the board) |
+| Repeatability (inner half / full frame) | 0.84 px / 1.88 px |
+| Principal point | (687, 391) |
+
+The standard model with k3 fixed was compared against k3 free, the rational model and the fisheye model on these captures. It was the most repeatable. The others fit slightly tighter but were less stable, and the fisheye model was unusable. The board was held by hand at 2–11° of tilt and only about 10 corners were visible per shot. A smaller board, steadier shots and larger tilts would improve the result.
 
 ## 📺 Undistorted View in Mainsail: `undistort_stream.py`
 This reads the crowsnest MJPEG stream, undistorts each frame with a `.npz`, and serves:

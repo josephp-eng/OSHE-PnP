@@ -8,7 +8,7 @@ import cv2
 
 from . import config as C
 from . import machine_state as MS
-from .camera import Camera
+from .camera import Camera, SnapshotCamera
 from .datum import DatumGeometry, measure_datum, to_datum_xy, to_machine_xy
 import numpy as np
 from .detect import find_circle
@@ -24,15 +24,27 @@ from .eventlog import EventLog
 def open_cam(cfg, role):
     c = cfg["cameras"][role]
     lens = LensModel(C.rel(cfg, c["calibration"]))
-    cam = Camera(c["device"], c["width"], c["height"], c["fps"],
-                 exposure=c.get("exposure", 0), name=role).start()
+    lc = cfg.get("lighting", {}).get(role, {})
+    if lc.get("on_when_opened"):             # e.g. down light: switch on before measuring
+        try:
+            make_light(lc, make_mr(cfg)).on()
+        except Exception as e:
+            raise SystemExit(f"{role} camera: could not switch its light on through Moonraker "
+                             f"({e}). Is Klipper running?")
+        time.sleep(lc.get("settle_s", 0.3))
+    if c.get("snapshot_url"):                 # normal case: share the camera with crowsnest
+        cam = SnapshotCamera(c["snapshot_url"], c["width"], c["height"], name=role).start()
+    else:                                     # direct V4L2 (crowsnest must not hold the device)
+        cam = Camera(c["device"], c["width"], c["height"], c["fps"],
+                     exposure=c.get("exposure", 0), name=role).start()
     return cam, lens
 
 
 def make_mr(cfg):
     m = cfg["moonraker"]
     mc = cfg["machine"]
-    return Moonraker(m["url"], m["feedrate_mm_min"], mc["x_range"], mc["y_range"], mc["z_range"])
+    return Moonraker(m["url"], m["feedrate_mm_min"], mc["x_range"], mc["y_range"], mc["z_range"],
+                     safe_travel_z=mc.get("safe_travel_z"))
 
 
 def cmd_check_lens(cfg, a):
@@ -87,10 +99,10 @@ def cmd_calibrate_offset(cfg, a):
     try:
         mmap = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
         input("Jog the NOZZLE directly over the centre of a dark dot (marker dot on a white label "
-              "stuck to the bed). Press Enter...")
+              "at the SAME height the down-camera motion map was calibrated at). Press Enter...")
         x1, y1, _ = mr.position()
-        input("Now raise Z to the down camera's focus height and jog roughly so the dot is in view. "
-              "Press Enter...")
+        input("Now lift the nozzle to a safe Z (on this machine SMALLER Z = HIGHER, e.g. Z5) and "
+              "jog X/Y only, roughly, so the dot is in the down camera's view. Press Enter...")
         grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
         locate = partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax)
         target = (lens.newK[0, 2], lens.newK[1, 2])
@@ -131,7 +143,9 @@ def cmd_datum(cfg, a):
         principal = np.array([lens.newK[0, 2], lens.newK[1, 2]])
 
         def view(x, y):
-            mr.move_abs(x=x, y=y, z=gz)
+            # XY only: the down camera isn't on Z, so lowering the nozzle never helps the
+            # view and could put it into the bin/clamps (it sits ~53 mm from the camera).
+            mr.move_abs(x=x, y=y)
             return lens.undistort(cam.fresh(settle_s=settle))
 
         def to_m(px, x, y):

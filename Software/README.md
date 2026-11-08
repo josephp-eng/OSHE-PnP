@@ -1,38 +1,97 @@
 # 💻 Software & Firmware Configuration
 
 ## Overview
-The OSHE Pick-and-Place machine uses a modern 3D-printer software stack to manage high-precision motion control, vacuum actuation, and component indexing. 
+The OSHE Pick-and-Place runs a 3D-printer software stack adapted for SMT assembly: **Klipper** for motion control, **Moonraker** as its API, **Mainsail** as the web dashboard, and **crowsnest** for the two cameras. A Python vision package, **pnpvision**, drives the machine through Moonraker.
 
-As of **Version 2.0 (Spring 2026)**, the project has transitioned to **Klipper Firmware** managed via the **Mainsail** web interface. This configuration allows for real-time macro editing and superior hardware communication compared to traditional monolithic firmware.
+> [!NOTE]
+> **Work in progress (Fall 2026, V3.0).** Motion, homing, lighting and the cameras work. The vacuum/valve, feeder and pick-and-place macros are **unfinished**, and the vision pipeline is partway through calibration. See [Status](#-status).
 
 ---
 
-## 🚀 The Klipper Stack (Recommended)
-This is the current standard for the MTU-OSHE Pick-and-Place. It splits processing between a host computer (Raspberry Pi/PC) and the MCU (Octopro Control Board).
+## 🧱 The Stack
+| Layer | What it is | Where |
+|---|---|---|
+| **Klipper** | Firmware: motion, steppers, pins, macros. Runs on the Pi (host) and the controller board (MCU). | [`Klipper/printer.cfg`](Klipper/printer.cfg) |
+| **Moonraker** | API between Klipper and everything else (web UI, vision code). Also keeps the webcam list and runs the update manager. | `moonraker.conf` on the Pi |
+| **Mainsail** | Web dashboard, opened in a browser at the Pi's address | MainsailOS |
+| **crowsnest** | Streams both USB cameras (`/webcam/` and `/webcam2/`) | `crowsnest.conf` on the Pi |
+| **KlipperScreen** | Touchscreen interface on the Pi's display | MainsailOS |
+| **pnpvision** | Vision: camera-to-machine calibration, datum, part inspection | [`pnpvision/`](pnpvision) |
 
-### 1. Host Interface: MainsailOS
-* **Purpose:** Provides the web dashboard for machine operation.
-* **Access:** Once installed, the machine is controlled via a local IP address in any web browser.
+**Hardware:** BTT Octopus Pro (STM32H723) with TMC5160 drivers, Raspberry Pi 4 (1 GB) running MainsailOS.
 
-### 2. Control Logic: Custom Macros
-The software includes specialized G-Code macros designed specifically for SMT assembly rather than 3D printing. These are located in `printer.cfg` and `macros.cfg`.
-* **Spool Management:** Automated coordinate calculation for up to 5 component feeders.
-* **Safety Logic:** Pre-configured "Z-Safe" heights to ensure the toolhead clears feeders and PCB clamps during rapid XY moves.
-* **Vacuum Actuation:** Dedicated pin-mapping for the solenoid valve, allowing for `VACUUM_ON` and `VACUUM_OFF` commands.
+---
 
-### 3. Setup Instructions
-1. **Flash MCU:** Use the provided Klipper firmware bin for your specific board (e.g., Creality V4.2.2 or SKR Mini).
-2. **Configuration:** Upload the `printer.cfg` from this repository to your Mainsail config directory.
-3. **Calibration:** Perform the **Machine Setup** and **Vacuum Calibration** steps detailed in the [Master Documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing).
+## ⚙️ Machine Configuration (`Klipper/printer.cfg`)
+This file is a copy of the live config on the Pi. On the Pi it lives at `~/printer_data/config/printer.cfg` and is edited in Mainsail (**Machine** tab → `printer.cfg` → **Save & Restart**). After changing it on the Pi, copy it back into the repo (run on the PC, not over SSH):
+```bash
+scp pnp@PnP.local:~/printer_data/config/printer.cfg "C:\Users\<you>\Documents\GitHub\OSHE-PnP\Software\Klipper\printer.cfg"
+```
+
+| Item | Value |
+|---|---|
+| Kinematics | CoreXY |
+| Travel | X 0–235, Y 0–343, Z 0–60 mm (sensorless homing on X/Y/Z) |
+| **Z direction** | **0 = homed at the top, larger Z = nozzle lower.** The nozzle touches the staging plate at about Z 50 and the PCB top at about Z 38. |
+| Nozzle rotation | `[manual_stepper stepper_r]`, 1 unit = 1° (LumenPnP NEMA 11). No endstop: `G28` / `G28 R` sets the current angle as 0. |
+| Homing | `[homing_override]`: Z first, then Y, then X, then zeroes R |
+| Lights | 3-LED neopixel chain: LED 1 = status, LEDs 2–3 = down-camera light |
+
+`printer.cfg` includes `mainsail.cfg` (supplied by MainsailOS) and `moonraker_obico_macros.cfg` (from the Obico plugin). On a machine without Obico, remove that `[include]` line.
+
+### Macros
+| Macro | Purpose | Status |
+|---|---|---|
+| `VISION_LIGHT_ON` / `_OFF` / `_TOGGLE` | Down-camera light (LEDs 2–3). It turns on at boot. | ✅ Working |
+| `LEDS_IDLE` / `LEDS_BUSY` / `LEDS_ERROR` / `LEDS_RAINBOW` / `LEDS_OFF` | Status LED (LED 1) effects | ✅ Working |
+| `TEST_BED_MOVEMENT [LOOPS=n]` | Corner, diagonal and Z exercise | ✅ Working |
+| `PNP_DEMO [LOOPS=n]` | Simulated pick/place motion only (no vacuum) | ✅ Working |
+| `VALVE_ON` / `VALVE_OFF` / `TOGGLE_VALVE` | Solenoid valve (FAN1 header, `PD12`) | 🚧 Pin control works; pneumatics not finished |
+| `MOTOR_RELAY_ON` / `_OFF` | Pulses the relay on `PE8` for 1 s | 🚧 Test macro |
+| `FEED [COUNT=n]` / `FEEDER_SET ANGLE=` | Reel feeder servo `feeder1` (`PG13`) | 🚧 Servo pulse limits are placeholders; not calibrated |
+| `PICK SPOOL=n` | Move to a spool, lower, open the valve, lift | ⚠️ **Unfinished, don't run.** `z_safe = 80` is outside Z 0–60, and the safe heights assume the old Z direction. |
+| `PLACE X= Y=` | Move, lower, release, lift | ⚠️ **Unfinished, don't run.** It references an undefined `default_z_place`. |
+| `CYCLE` | Feeder pressure/stepper cycle | ⚠️ **Unfinished, don't run.** `pressure_motor` and the `feeder` stepper aren't defined. |
+
+**Clearance:** the tallest fixtures on the staging plate are the reject bin (15 mm), the datum (11 mm) and the PCB clamps (8–10 mm). When jogging X/Y by hand, keep the nozzle at **Z 30 or higher (smaller number)**.
+
+---
+
+## 📷 Cameras & Vision
+| Camera | Hardware | crowsnest | Calibration |
+|---|---|---|---|
+| Down (on the toolhead gantry) | Arducam 12MP USB, M12 lens | `[cam 1]`, 1920x1080, `/webcam/` | `calibration_cam_down.npz` |
+| Up (staging plate) | InnoMaker 720P, 120° | `[cam 2]`, 1280x720, `/webcam2/` | `calibration_cam_up.npz` |
+
+* **Lens calibration** and the **undistorted Mainsail views** (`undistort-down` / `undistort-up` services on ports 8090 / 8091) are documented in [`Archive/USB Camera Calibration Vibecode Project`](../Archive/USB%20Camera%20Calibration%20Vibecode%20Project).
+* **pnpvision** ([README](pnpvision/README.md)) reads both cameras from crowsnest's snapshot URLs, so the dashboard views keep working while it runs. It moves the machine through Moonraker and always lifts the nozzle to a safe travel height (Z 30) before any X/Y move.
+
+---
+
+## 📋 Status
+| Subsystem | State |
+|---|---|
+| Motion, homing, nozzle rotation stepper | ✅ Working |
+| Status and down-camera lighting | ✅ Working |
+| Cameras: streaming, lens calibration, undistorted views | ✅ Done |
+| Vision: camera ↔ machine calibration, nozzle offset, datum | 🚧 In progress (pnpvision steps 1–4) |
+| Board alignment from pads (no fiducials) | 📅 Planned |
+| Bottom vision (part offset/rotation on the nozzle) | 📅 Planned (code exists; needs a part on the nozzle) |
+| Vacuum / valve pneumatics | 🚧 Unfinished |
+| Feeders | 🚧 Unfinished (one servo, uncalibrated) |
+| Pick / place macros and job runner (reject bin, missed-pick retry) | 📅 Planned |
+| Up-camera light | 📅 Not wired yet |
 
 ---
 
 ## ⚠️ Legacy: Marlin Firmware (Deprecated)
-*Version 1.0 (Fall 2025) utilized Marlin. While instructions for this remain in the documentation for users with stock Ender 3 hardware, it is **not recommended** for V2.0 builds due to limitations in macro flexibility and real-time adjustment.*
+*Version 1.0 (Fall 2025) used Marlin; the source is in [`Legacy-Marlin`](Legacy-Marlin). It isn't used on the current machine.*
 
 ## 🔍 Troubleshooting
-* **TMC Driver Communication:** If all registers read zero, verify the 24V power supply to the board; Klipper will report a "Communication Failure" if the drivers are unpowered.
-* **Vacuum Failure:** If the solenoid clicks but no suction occurs, check for air leaks in the 3D-printed toolhead manifold or verify the 24V-to-12V buck converter output.
+* **TMC driver communication:** if all registers read zero, check the 24 V supply to the board. Klipper reports a communication failure when the drivers are unpowered.
+* **Moonraker warning about crowsnest `install_script`:** in `moonraker.conf`, set `install_script: tools/install.sh`.
+* **Camera shows "NO SIGNAL" or crowsnest won't start:** check `~/printer_data/logs/crowsnest.log`. "`ustreamer` not found" means crowsnest must be reinstalled (`cd ~/crowsnest && sudo make install`, inside `tmux`).
+* **Pi freezes during installs:** a 1 GB Pi runs out of memory. Use plain SSH plus `tmux`, stop KlipperScreen temporarily, and always install OpenCV with `pip install --only-binary=:all:`.
 
 ---
-*Refer to the Technical Information section (Page 55+) of the [Master Documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing) for deep-dive code logic and coordinate offsets.*
+*See the [Master Documentation](https://docs.google.com/document/d/1zdPMhOE8R7Szz68Ky9EoDyxVyp7iftD7q8Uco1WKPY8/edit?usp=sharing) for assembly and electrical details.*
