@@ -110,6 +110,10 @@ This reads the crowsnest MJPEG stream, undistorts each frame with a `.npz`, and 
 * `http://<pi>:8090/stream` : live view (Mainsail **Stream URL**)
 * `http://<pi>:8090/snapshot` : single JPEG (Mainsail **Snapshot URL**)
 
+The image has **square pixels** (round things look round) and the same geometry pnpvision measures in (`square_new_K`, kept identical in `Software/pnpvision/pnpvision/lens.py`).
+
+**Reticle:** both URLs draw a yellow crosshair on the **optical axis**, the point pnpvision centres features on. It is not the middle of the frame, so turn off Mainsail's own crosshair. With `--motion`, it also draws 1 mm ticks (labelled every 5 mm) along the machine's +X and +Y axes, read from pnpvision's motion map. The ticks are only true at the height the motion map was calibrated at (the PCB top for the down camera). Add `?reticle=0` for a clean view, e.g. `http://<pi>:8090/stream?reticle=0`; a second Mainsail webcam entry with that URL gives a with/without pair.
+
 It only processes frames **while someone is watching**. With nobody watching it disconnects from the stream and uses 0% CPU, so it can stay running permanently as a debug view.
 
 | Option | Default | Meaning |
@@ -120,6 +124,7 @@ It only processes frames **while someone is watching**. With nobody watching it 
 | `--fps` | `10` | Maximum frames processed per second. Extra frames are skipped before decoding. This is the main CPU lever. |
 | `--scale` | `0.5` | Output size relative to the camera frame (0.5 of 1920x1080 is 960x540) |
 | `--quality` | `80` | Output JPEG quality |
+| `--motion` | none | pnpvision motion map (`calibration/motion_down.json`) for the reticle's mm ticks. Re-read automatically when `calibrate-motion` rewrites it. Without it: crosshair only. |
 
 **Run at boot** (systemd service `undistort-down`):
 ```bash
@@ -131,8 +136,8 @@ Wants=crowsnest.service
 
 [Service]
 User=pnp
-WorkingDirectory=/home/pnp/calib
-ExecStart=/home/pnp/calib/venv/bin/python /home/pnp/calib/undistort_stream.py --calib /home/pnp/calib/captures/cam_down/calibration_cam_down.npz
+WorkingDirectory=/home/pnp/OSHE-PnP/Software/pnpvision
+ExecStart=/home/pnp/venv-pnp/bin/python "/home/pnp/OSHE-PnP/Archive/USB Camera Calibration Vibecode Project/undistort_stream.py" --calib /home/pnp/OSHE-PnP/Software/pnpvision/calibration/calibration_cam_down.npz --motion /home/pnp/OSHE-PnP/Software/pnpvision/calibration/motion_down.json --fps 10 --scale 0.5
 Restart=always
 RestartSec=5
 Nice=10
@@ -144,7 +149,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now undistort-down
 ```
 * To change options, add them to the end of the `ExecStart=` line (for example `--fps 5`), then run `sudo systemctl daemon-reload && sudo systemctl restart undistort-down`.
 * After recalibrating, run `sudo systemctl restart undistort-down` so it loads the new `.npz`.
-* For the up camera, run a second service with `--source http://localhost/webcam2/?action=stream`, its own `.npz`, and `--port 8091`.
+* For the up camera, run a second service with `--source http://localhost/webcam2/?action=stream`, its own `.npz`, `--port 8091` and `--scale 1` (add `--motion .../motion_up.json` once the up camera has one).
 * **This view is for people.** Vision code should read the **raw** `/webcam/` stream and apply the `.npz` itself. Undistorting the undistorted stream again would distort it a second time.
 * In Mainsail you can hide the raw webcam entry, but keep the crowsnest `[cam 1]` section. The undistorted view is built from it.
 
