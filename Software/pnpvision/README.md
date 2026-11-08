@@ -19,6 +19,8 @@ Z on this machine: 0 = homed at the top, larger Z = nozzle lower
 1. `python -m pnpvision check-lens`            (no hardware needed)
 2. `python -m pnpvision snapshot --cam up`     (look at the images; tune exposure/lighting)
 3. `python -m pnpvision calibrate-motion --cam down --step 1.0`   (px<->mm, axis directions)
+   `python -m pnpvision repeatability --n 20`   (same dot: travel away and back, measure landing scatter;
+   add `--home-every 5` to include X/Y re-homing; results saved in results/)
 4. `python -m pnpvision calibrate-motion --cam up --find-center`
 5. `python -m pnpvision calibrate-offset`      (camera-to-nozzle offset; repeat 3-5x)
 6. `python -m pnpvision datum --teach`       (jog down cam so the whole grid is centred and sharp)

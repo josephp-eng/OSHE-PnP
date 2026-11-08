@@ -1,6 +1,7 @@
 """python -m pnpvision <command>   (run from the project folder)"""
 import argparse
 import json
+import os
 import time
 from functools import partial
 
@@ -15,7 +16,7 @@ from .detect import find_circle
 from .lens import LensModel
 from .moonraker import Moonraker
 from .motion import MotionMap
-from .servo import calibrate_motion, center_on
+from .servo import calibrate_motion, center_on, repeatability_test
 from .lighting import make_light, grab_lit
 from .upcam import UpCam
 from .eventlog import EventLog
@@ -114,6 +115,44 @@ def cmd_calibrate_offset(cfg, a):
         off = [x1 - x2, y1 - y2]       # camera axis position relative to nozzle axis
         MS.save(C.rel(cfg, "calibration/machine.json"), down_cam_offset_mm=off)
         print("down_cam_offset_mm =", off, "(repeat 3-5x from different spots; spread = your error)")
+    finally:
+        cam.stop()
+
+
+def cmd_repeatability(cfg, a):
+    """Down camera over a fixed dot: travel away and back N times, measure where it lands."""
+    mr = make_mr(cfg)
+    if a.feed:
+        mr.feedrate = a.feed
+    cam, lens = open_cam(cfg, "down")
+    settle = cfg["moonraker"]["settle_s"]
+    try:
+        mmap = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
+        grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
+        locate = partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax)
+        target = (lens.newK[0, 2], lens.newK[1, 2])
+        res = center_on(grab, locate, mr.move_rel, mmap, target, tol_mm=0.01)
+        print("centering on the dot:", res)
+        if not res["converged"]:
+            raise SystemExit("could not centre on the dot; is it in view and at the calibrated height?")
+        x, y, z = mr.position()
+        print(f"\nAbout to run {a.n} cycles from X{x:.2f} Y{y:.2f}: travel {a.radius[0]:g}-{a.radius[1]:g} mm "
+              f"away (8 directions) and back at F{mr.feedrate:.0f}"
+              + (f", re-homing X/Y (G28 X Y) every {a.home_every} cycles" if a.home_every else "") + ".")
+        print(f"Every X/Y move first lifts the nozzle to Z <= {mr.safe_travel_z} "
+              f"(now Z{z:.2f}); make sure nothing within that radius is taller than that clearance.")
+        input("Press Enter to start (Ctrl+C to cancel)...")
+        out = repeatability_test(grab, locate, mmap, mr.move_abs, mr.position, n=a.n,
+                                 radius_mm=tuple(a.radius), limits=mr.limits,
+                                 home=lambda: mr.gcode("G28 X Y"), home_every=a.home_every, seed=a.seed)
+        out["settings"] = {"start_xyz": [x, y, z], "feedrate": mr.feedrate, "radius_mm": a.radius,
+                           "home_every": a.home_every, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+        print(json.dumps(out["summary"], indent=2))
+        path = C.rel(cfg, "results/repeatability_" + time.strftime("%Y%m%d_%H%M%S") + ".json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(out, f, indent=2)
+        print("saved", path)
     finally:
         cam.stop()
 
@@ -224,6 +263,15 @@ def main():
     p = sub.add_parser("calibrate-offset")
     p.add_argument("--rmin", type=float, default=15); p.add_argument("--rmax", type=float, default=120)
 
+    p = sub.add_parser("repeatability", help="down cam over a dot: go away and back N times, measure landing scatter")
+    p.add_argument("--n", type=int, default=20, help="cycles")
+    p.add_argument("--radius", type=float, nargs=2, default=[30.0, 80.0], metavar=("MIN", "MAX"),
+                   help="how far away each cycle travels, mm")
+    p.add_argument("--home-every", type=int, default=0, help="re-home X/Y every N cycles (0 = never)")
+    p.add_argument("--feed", type=float, help="feedrate mm/min (default: config.toml)")
+    p.add_argument("--seed", type=int, help="random seed for the travel distances")
+    p.add_argument("--rmin", type=float, default=15); p.add_argument("--rmax", type=float, default=120)
+
     p = sub.add_parser("light-test"); p.add_argument("--n", type=int, default=3)
     p = sub.add_parser("inspect-up")
     p.add_argument("--size", type=float, nargs=2, metavar=("L", "W"), help="expected part body, mm")
@@ -235,4 +283,5 @@ def main():
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
+     "repeatability": cmd_repeatability,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)

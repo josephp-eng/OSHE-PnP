@@ -165,6 +165,42 @@ def test_calibrate_and_center():
     assert np.linalg.norm(w.cam - w.dot) < 0.05, (w.cam, w.dot)
 
 
+def test_repeatability_finds_backlash():
+    """Simulated toolhead with 0.04 mm X backlash and no Y error: the test must report
+    a ~0.04 mm X direction gap, ~0 in Y, and keep every move inside the limits."""
+    from pnpvision.servo import repeatability_test
+    M_true = np.array([[-58.7, 0.5], [0.6, 59.2]]) * (40 / 59)     # fits the 1280x720 sim
+    w = World(M_true, dot_mm=(0.0, 0.0))
+    state = {"cmd": np.array([100.0, 100.0]), "last_dx": 1.0, "homes": 0}
+    BACKLASH = 0.04
+    limits = {"x": (0.0, 235.0), "y": (0.0, 140.0)}
+
+    def move_abs(x=None, y=None, z=None):
+        new = np.array([x, y], float)
+        assert limits["x"][0] <= x <= limits["x"][1] and limits["y"][0] <= y <= limits["y"][1], new
+        dx = new[0] - state["cmd"][0]
+        if abs(dx) > 1e-9:
+            state["last_dx"] = dx
+        state["cmd"] = new
+        # true camera position (relative to the dot at the start XY): lags when moving -X
+        w.cam = new - (100.0, 100.0) + (0.0 if state["last_dx"] > 0 else -BACKLASH, 0.0)
+
+    def home():
+        state["homes"] += 1
+
+    move_abs(100.0, 100.0)
+    res = repeatability_test(w.grab, lambda f: find_circle(f, 15, 120), MotionMap(M_true, "camera"),
+                             move_abs, lambda: (*state["cmd"], 10.0), n=16, radius_mm=(30, 80),
+                             limits=limits, home=home, home_every=4, seed=1, log=lambda *a: None)
+    s = res["summary"]
+    assert state["homes"] == 4
+    gx, gy = s["direction_gap_mm"]
+    # far point on +X side -> returns moving -X -> lands BACKLASH short
+    assert abs(gx - (-BACKLASH)) < 0.01, s
+    assert abs(gy) < 0.01, s
+    assert s["noise_floor_mm"][0] < 0.005, s
+
+
 def test_measure_part_up_camera():
     img = np.full((720, 1280), 60, np.uint8)
     rect = ((650.0, 350.0), (80.0, 40.0), 30.0)      # 80x40 px part rotated 30 deg
