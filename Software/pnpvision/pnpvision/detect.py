@@ -17,9 +17,12 @@ class Circle:
 
 
 def find_circles(img, r_min_px, r_max_px, min_circularity=0.80,
-                 polarity="both", external_only=False):
+                 polarity="both", external_only=False, threshold=None):
     """All round blobs, best circularity first. polarity: "bright" | "dark" | "both".
-    external_only skips holes inside bigger shapes (e.g. the cells of the datum grid)."""
+    external_only skips holes inside bigger shapes (e.g. the cells of the datum grid).
+    threshold: None = automatic (Otsu) black/white cut-off for the whole frame; a number
+    0-255 = fixed cut-off. Use a fixed high one (~230, polarity "bright") for a white dot on
+    a sparkly or textured surface, where Otsu lets the glints merge into the dot."""
     g = cv2.GaussianBlur(_gray(img), (5, 5), 0)
     h, w = g.shape
     modes = {"dark": [cv2.THRESH_BINARY_INV], "bright": [cv2.THRESH_BINARY],
@@ -27,7 +30,10 @@ def find_circles(img, r_min_px, r_max_px, min_circularity=0.80,
     retr = cv2.RETR_EXTERNAL if external_only else cv2.RETR_LIST
     found = []
     for mode in modes:
-        _, bw = cv2.threshold(g, 0, 255, mode | cv2.THRESH_OTSU)
+        if threshold is None:
+            _, bw = cv2.threshold(g, 0, 255, mode | cv2.THRESH_OTSU)
+        else:
+            _, bw = cv2.threshold(g, float(threshold), 255, mode)
         cnts, _ = cv2.findContours(bw, retr, cv2.CHAIN_APPROX_NONE)
         for c in cnts:
             a = cv2.contourArea(c)
@@ -46,10 +52,10 @@ def find_circles(img, r_min_px, r_max_px, min_circularity=0.80,
     return sorted(found, key=lambda c: -c.circularity)
 
 
-def find_circle(img, r_min_px, r_max_px, min_circularity=0.80):
-    """Most circular blob, dark-on-light or light-on-dark.
+def find_circle(img, r_min_px, r_max_px, min_circularity=0.80, polarity="both", threshold=None):
+    """Most circular blob, dark-on-light or light-on-dark (see find_circles for options).
     Use for: a marker dot, the nozzle tip ring seen by the up camera, round fiducials."""
-    found = find_circles(img, r_min_px, r_max_px, min_circularity)
+    found = find_circles(img, r_min_px, r_max_px, min_circularity, polarity, threshold=threshold)
     return found[0] if found else None
 
 

@@ -165,6 +165,20 @@ def test_calibrate_and_center():
     assert np.linalg.norm(w.cam - w.dot) < 0.05, (w.cam, w.dot)
 
 
+def test_white_dot_on_sparkly_surface():
+    """Like the datum's white dot under the LEDs: a saturated dot on a mid-grey surface full of
+    bright glints. Automatic (Otsu) threshold lets glints merge with the dot; fixed 230 works."""
+    rng = np.random.default_rng(0)
+    img = rng.normal(116, 35, (1080, 1920)).clip(0, 255).astype(np.uint8)
+    for _ in range(4000):                                   # glints, some touching the dot
+        x, y = rng.integers(0, 1920), rng.integers(0, 1080)
+        cv2.circle(img, (int(x), int(y)), int(rng.integers(2, 9)), int(rng.integers(160, 235)), -1)
+    cv2.circle(img, (878, 634), 80, 254, -1, cv2.LINE_AA)
+    c = find_circle(img, 15, 120, polarity="bright", threshold=230)
+    assert c is not None and abs(c.center_px[0] - 878) < 1 and abs(c.center_px[1] - 634) < 1, c
+    assert abs(c.radius_px - 80) < 3, c
+
+
 def test_repeatability_finds_backlash():
     """Simulated toolhead with 0.04 mm X backlash and no Y error: the test must report
     a ~0.04 mm X direction gap, ~0 in Y, and keep every move inside the limits."""

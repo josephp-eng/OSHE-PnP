@@ -41,6 +41,22 @@ def open_cam(cfg, role):
     return cam, lens
 
 
+def dot_locator(a):
+    """Circle finder configured from the --rmin/--rmax/--polarity/--thresh options."""
+    return partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax,
+                   polarity=a.polarity, threshold=a.thresh)
+
+
+def add_dot_args(p):
+    p.add_argument("--rmin", type=float, default=15, help="dot min radius, px")
+    p.add_argument("--rmax", type=float, default=120, help="dot max radius, px")
+    p.add_argument("--polarity", default="both", choices=["both", "dark", "bright"],
+                   help="dark dot on light, bright dot on dark, or either")
+    p.add_argument("--thresh", type=float,
+                   help="fixed 0-255 black/white cut-off instead of automatic "
+                        "(e.g. --polarity bright --thresh 230 for the datum's white dots)")
+
+
 def make_mr(cfg):
     m = cfg["moonraker"]
     mc = cfg["machine"]
@@ -75,7 +91,7 @@ def cmd_calibrate_motion(cfg, a):
     settle = cfg["moonraker"]["settle_s"]
     try:
         grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
-        locate = partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax)
+        locate = dot_locator(a)
         moving = "camera" if a.cam == "down" else "target"
         mmap = calibrate_motion(grab, locate, mr.move_rel, a.step, moving)
         print(json.dumps(mmap.describe(), indent=2))
@@ -105,7 +121,7 @@ def cmd_calibrate_offset(cfg, a):
         input("Now lift the nozzle to a safe Z (on this machine SMALLER Z = HIGHER, e.g. Z5) and "
               "jog X/Y only, roughly, so the dot is in the down camera's view. Press Enter...")
         grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
-        locate = partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax)
+        locate = dot_locator(a)
         target = (lens.newK[0, 2], lens.newK[1, 2])
         res = center_on(grab, locate, mr.move_rel, mmap, target, tol_mm=0.01)
         print("centering:", res)
@@ -129,7 +145,7 @@ def cmd_repeatability(cfg, a):
     try:
         mmap = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
         grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
-        locate = partial(find_circle, r_min_px=a.rmin, r_max_px=a.rmax)
+        locate = dot_locator(a)
         target = (lens.newK[0, 2], lens.newK[1, 2])
         res = center_on(grab, locate, mr.move_rel, mmap, target, tol_mm=0.01)
         print("centering on the dot:", res)
@@ -257,11 +273,10 @@ def main():
     p = sub.add_parser("calibrate-motion")
     p.add_argument("--cam", required=True, choices=["up", "down"])
     p.add_argument("--step", type=float, default=1.0, help="jog size, mm")
-    p.add_argument("--rmin", type=float, default=15, help="feature min radius, px")
-    p.add_argument("--rmax", type=float, default=120, help="feature max radius, px")
+    add_dot_args(p)
     p.add_argument("--find-center", action="store_true", help="(up) also record nozzle-over-camera XY")
     p = sub.add_parser("calibrate-offset")
-    p.add_argument("--rmin", type=float, default=15); p.add_argument("--rmax", type=float, default=120)
+    add_dot_args(p)
 
     p = sub.add_parser("repeatability", help="down cam over a dot: go away and back N times, measure landing scatter")
     p.add_argument("--n", type=int, default=20, help="cycles")
@@ -270,7 +285,7 @@ def main():
     p.add_argument("--home-every", type=int, default=0, help="re-home X/Y every N cycles (0 = never)")
     p.add_argument("--feed", type=float, help="feedrate mm/min (default: config.toml)")
     p.add_argument("--seed", type=int, help="random seed for the travel distances")
-    p.add_argument("--rmin", type=float, default=15); p.add_argument("--rmax", type=float, default=120)
+    add_dot_args(p)
 
     p = sub.add_parser("light-test"); p.add_argument("--n", type=int, default=3)
     p = sub.add_parser("inspect-up")

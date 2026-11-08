@@ -19,6 +19,10 @@ Z on this machine: 0 = homed at the top, larger Z = nozzle lower
 1. `python -m pnpvision check-lens`            (no hardware needed)
 2. `python -m pnpvision snapshot --cam up`     (look at the images; tune exposure/lighting)
 3. `python -m pnpvision calibrate-motion --cam down --step 1.0`   (px<->mm, axis directions)
+   Use a dark ~3 mm dot on flat white paper at PCB-top height (scale changes with height).
+   The fitted map also captures how the camera is rotated relative to the machine axes
+   (0.5 deg on our build; any angle works), mirroring and any X/Y scale difference, so the
+   camera needs no mechanical squaring. Re-run it after moving or remounting the camera.
    `python -m pnpvision repeatability --n 20`   (same dot: travel away and back, measure landing scatter;
    add `--home-every 5` to include X/Y re-homing; results saved in results/)
 4. `python -m pnpvision calibrate-motion --cam up --find-center`
