@@ -21,8 +21,8 @@ snapshot in the last few seconds); otherwise it sleeps at ~0% CPU.
 
 Options worth knowing:
     --scale 0.5   output size relative to the camera frame (less Pi CPU)
-    --alpha 0     0 = crop to only valid pixels (no black edges),
-                  1 = keep the whole field of view (curved black borders)
+                  (the view always has square pixels and no black edges; same
+                  geometry as pnpvision, so circles look round)
     --fps 10      cap on frames processed per second (keeps CPU free for Klipper)
 """
 
@@ -64,13 +64,60 @@ def mjpeg_frames(url):
             time.sleep(2)
 
 
+def square_new_K(K, dist, in_size, out_size, centered=False):
+    """Camera matrix for the undistorted image: SQUARE pixels (fx == fy) and as wide a view
+    as possible with only valid pixels (no black edges). The optical axis sits where
+    getOptimalNewCameraMatrix(alpha=0) puts it (off-centre on these lenses); centered=True
+    moves it to the frame centre instead, which costs ~17% of the down camera's view.
+
+    cv2.getOptimalNewCameraMatrix(alpha=0) fills the frame by scaling X and Y differently
+    (on these wide lenses fy/fx came out 1.24 down, 1.17 up), which stretches circles into
+    ovals and makes px->mm differ per axis. Keep this function identical to the copy in
+    Software/pnpvision/pnpvision/lens.py so the Mainsail
+    view and pnpvision share one image geometry.
+    """
+    K = np.asarray(K, np.float64)
+    dist = np.asarray(dist, np.float64).ravel()
+    w, h = in_size
+    W, H = out_size
+    if centered:
+        cx, cy = (W - 1) / 2.0, (H - 1) / 2.0
+    else:
+        k0, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), 0.0, (W, H))
+        cx, cy = float(k0[0, 2]), float(k0[1, 2])
+    # Radius where the radial model folds back (rd stops growing): beyond it projected
+    # points can land inside the frame by accident, so treat it as invalid.
+    k1, k2, k3 = dist[0], dist[1], dist[4] if dist.size > 4 else 0.0
+    r = np.linspace(0, 5, 5001)
+    fold = np.where(np.diff(r * (1 + k1 * r**2 + k2 * r**4 + k3 * r**6)) <= 0)[0]
+    r_fold = r[fold[0]] if len(fold) else np.inf
+    n = 200
+    u = np.r_[np.linspace(0, W - 1, n), np.linspace(0, W - 1, n), np.zeros(n), np.full(n, W - 1.0)]
+    v = np.r_[np.zeros(n), np.full(n, H - 1.0), np.linspace(0, H - 1, n), np.linspace(0, H - 1, n)]
+
+    def valid(f):
+        x, y = (u - cx) / f, (v - cy) / f
+        if np.max(np.hypot(x, y)) >= r_fold:
+            return False
+        p, _ = cv2.projectPoints(np.c_[x, y, np.ones_like(x)].reshape(-1, 1, 3),
+                                 np.zeros(3), np.zeros(3), K, dist)
+        p = p.reshape(-1, 2)
+        return bool(np.all((p[:, 0] >= 0) & (p[:, 0] <= w - 1) & (p[:, 1] >= 0) & (p[:, 1] <= h - 1)))
+
+    lo, hi = 1e-3, 1e3 * max(K[0, 0], K[1, 1]) * max(W / w, H / h)
+    for _ in range(60):                       # smallest f (widest view) that is still valid
+        mid = np.sqrt(lo * hi)
+        lo, hi = (lo, mid) if valid(mid) else (mid, hi)
+    return np.array([[hi, 0, cx], [0, hi, cy], [0, 0, 1]], np.float64)
+
+
 class Undistorter:
-    def __init__(self, calib_path, scale, alpha):
+    def __init__(self, calib_path, scale):
         d = np.load(calib_path)
         self.K = d["camera_matrix"]
         self.dist = d["dist_coeffs"]
         self.calib_size = tuple(int(v) for v in d["image_size"])
-        self.scale, self.alpha = scale, alpha
+        self.scale = scale
         self.maps, self.size = None, None
 
     def _build(self, w, h):
@@ -83,10 +130,10 @@ class Undistorter:
             K[0] *= w / self.calib_size[0]
             K[1] *= h / self.calib_size[1]
         out = (max(1, round(w * self.scale)), max(1, round(h * self.scale)))
-        newK, _ = cv2.getOptimalNewCameraMatrix(K, self.dist, (w, h), self.alpha, out)
+        newK = square_new_K(K, self.dist, (w, h), out)
         self.maps = cv2.initUndistortRectifyMap(K, self.dist, None, newK, out, cv2.CV_16SC2)
         self.size = (w, h)
-        print(f"undistorting {w}x{h} -> {out[0]}x{out[1]} (alpha={self.alpha})", flush=True)
+        print(f"undistorting {w}x{h} -> {out[0]}x{out[1]} (f={newK[0, 0]:.1f} px, centre {newK[0, 2]:.1f},{newK[1, 2]:.1f})", flush=True)
 
     def __call__(self, frame):
         h, w = frame.shape[:2]
@@ -139,7 +186,7 @@ class Latest:
 
 
 def worker(args, latest):
-    und = Undistorter(args.calib, args.scale, args.alpha)
+    und = Undistorter(args.calib, args.scale)
     min_dt = 1.0 / args.fps if args.fps > 0 else 0.0
     while True:
         latest.wait_until_wanted()           # sleep (0% CPU) until someone watches
@@ -229,7 +276,6 @@ def main():
                     help="crowsnest MJPEG stream (use /webcam2/ for the second camera)")
     ap.add_argument("--port", type=int, default=8090)
     ap.add_argument("--scale", type=float, default=0.5)
-    ap.add_argument("--alpha", type=float, default=0.0)
     ap.add_argument("--fps", type=float, default=10.0)
     ap.add_argument("--quality", type=int, default=80)
     args = ap.parse_args()

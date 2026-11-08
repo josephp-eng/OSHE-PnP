@@ -119,7 +119,6 @@ It only processes frames **while someone is watching**. With nobody watching it 
 | `--port` | `8090` | HTTP port to serve on |
 | `--fps` | `10` | Maximum frames processed per second. Extra frames are skipped before decoding. This is the main CPU lever. |
 | `--scale` | `0.5` | Output size relative to the camera frame (0.5 of 1920x1080 is 960x540) |
-| `--alpha` | `0` | 0 = crop to valid pixels only; 1 = full field of view with curved black borders |
 | `--quality` | `80` | Output JPEG quality |
 
 **Run at boot** (systemd service `undistort-down`):
