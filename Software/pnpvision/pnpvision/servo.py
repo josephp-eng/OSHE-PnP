@@ -134,3 +134,32 @@ def repeatability_test(grab, locate, motion, move_abs, position, n=20, radius_mm
         H = E[[c["homed"] for c in cycles]]
         summary["after_rehome_max_abs_mm"] = np.abs(H).max(axis=0).round(4).tolist()
     return {"cycles": cycles, "summary": summary}
+
+
+def visual_home(grab, locate, motion, target_px, move_abs, position, set_xy, taught_xy,
+                home=None, tol_mm=0.01, log=print):
+    """Homing-fiducial correction. Sensorless X/Y homing lands up to ~2 mm off; a fixed dot
+    (datum dot 0) does not move. Optionally home(), go to where the down camera sat centred
+    over the dot when it was taught, centre on it, then declare "this is taught_xy" with
+    set_xy(x, y) (SET_KINEMATIC_POSITION). Only shifts the frame (homing never rotates it).
+    Returns dict(homing_error_mm=[dx, dy] = where the frame was vs the taught one, ...)."""
+    if home:
+        home()
+    tx, ty = float(taught_xy[0]), float(taught_xy[1])
+    move_abs(x=tx, y=ty)
+
+    def move_rel(dx, dy):
+        x, y = position()[:2]
+        move_abs(x=x + dx, y=y + dy)
+
+    res = center_on(grab, locate, move_rel, motion, target_px, tol_mm=tol_mm, max_iter=8)
+    if not res["converged"]:
+        raise RuntimeError(f"visual home: could not centre on the homing dot ({res}). "
+                           "Is it in view near the taught position, lit, and detected with the "
+                           "taught settings?")
+    mx, my = position()[:2]
+    err = [mx - tx, my - ty]          # commanded XY that actually put the camera over the dot
+    set_xy(tx, ty)
+    log(f"visual home: frame was off by X {err[0]:+.4f} Y {err[1]:+.4f} mm; "
+        f"position reset to X{tx:.4f} Y{ty:.4f}")
+    return {"homing_error_mm": err, "centering": res}

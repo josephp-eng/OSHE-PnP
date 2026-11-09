@@ -7,6 +7,7 @@ DEFAULTS = {
     "up_cam_xy_mm": [0.0, 0.0],        # toolhead XY where nozzle axis is over up-cam optical axis
     "grid_view_xyz": None,              # toolhead XYZ that puts the datum grid centred in the down cam
     "up_cam_in_datum_mm": None,         # up-cam axis in DATUM coordinates (recorded by datum --reference)
+    "visual_home": None,                # {"xy": toolhead XY with the homing dot centred, + detector settings}
 }
 
 def load(path):

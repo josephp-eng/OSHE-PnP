@@ -16,7 +16,7 @@ from .detect import find_circle
 from .lens import LensModel
 from .moonraker import Moonraker
 from .motion import MotionMap
-from .servo import calibrate_motion, center_on, repeatability_test
+from .servo import calibrate_motion, center_on, repeatability_test, visual_home
 from .lighting import make_light, grab_lit
 from .upcam import UpCam
 from .eventlog import EventLog
@@ -173,6 +173,66 @@ def cmd_repeatability(cfg, a):
         cam.stop()
 
 
+def cmd_home(cfg, a):
+    """Visual homing on a fixed dot (datum dot 0). --teach once; then use instead of plain G28."""
+    mr = make_mr(cfg)
+    ms_path = C.rel(cfg, "calibration/machine.json")
+    cam, lens = open_cam(cfg, "down")
+    settle = cfg["moonraker"]["settle_s"]
+    try:
+        motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
+        grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
+        target = (lens.newK[0, 2], lens.newK[1, 2])
+        if a.teach:
+            if not mr.is_homed():
+                raise SystemExit("home the machine first (G28), then jog the homing dot under the crosshair")
+            locate = dot_locator(a)
+            res = center_on(grab, locate, mr.move_rel, motion, target, tol_mm=0.01, max_iter=8)
+            print("centering:", res)
+            if not res["converged"]:
+                raise SystemExit("could not centre on the dot; check --polarity/--thresh with `snapshot`")
+            x, y, _ = mr.position()
+            MS.save(ms_path, visual_home={"xy": [x, y], "rmin": a.rmin, "rmax": a.rmax,
+                                          "polarity": a.polarity, "thresh": a.thresh,
+                                          "taught": time.strftime("%Y-%m-%d %H:%M:%S")})
+            print(f"taught homing dot at X{x:.4f} Y{y:.4f} (saved in {ms_path}).\n"
+                  "This XY now DEFINES the machine frame: positions measured later (up camera, "
+                  "feeders, boards) are only valid against it, so don't re-teach casually.")
+            return
+        vh = MS.load(ms_path).get("visual_home")
+        if not vh:
+            raise SystemExit("run `home --teach` first")
+        locate = partial(find_circle, r_min_px=vh["rmin"], r_max_px=vh["rmax"],
+                         polarity=vh["polarity"], threshold=vh["thresh"])
+        if a.no_g28:
+            home = None
+        elif mr.is_homed():
+            home = lambda: mr.gcode("G28 X Y")
+        else:
+            home = lambda: mr.gcode("G28")         # first home after power-up: Z too
+
+        def set_xy(x, y):
+            z = mr.position()[2]
+            mr.gcode(f"SET_KINEMATIC_POSITION X={x:.4f} Y={y:.4f} Z={z:.4f}")
+
+        out = visual_home(grab, locate, motion, target, mr.move_abs, mr.position, set_xy,
+                          vh["xy"], home=home)
+        d = locate(grab())                          # check: no move, dot should sit on target
+        if d is not None:
+            chk = motion.offset_mm(np.array(d.center_px) - target)
+            print(f"check after reset: dot {np.linalg.norm(chk):.4f} mm from the crosshair")
+        path = C.rel(cfg, "results/visual_home_log.csv")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        new = not os.path.exists(path)
+        with open(path, "a") as f:
+            if new:
+                f.write("time,g28,homing_error_x_mm,homing_error_y_mm\n")
+            e = out["homing_error_mm"]
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{home is not None},{e[0]:.4f},{e[1]:.4f}\n")
+    finally:
+        cam.stop()
+
+
 def cmd_datum(cfg, a):
     """--teach: remember where the grid is.  --reference: record up-cam position in datum frame.
     (no flag): re-measure the datum and report drift of the up camera's machine position."""
@@ -287,6 +347,12 @@ def main():
     p.add_argument("--seed", type=int, help="random seed for the travel distances")
     add_dot_args(p)
 
+    p = sub.add_parser("home", help="visual homing: G28 X Y, then re-zero X/Y on the homing dot")
+    p.add_argument("--teach", action="store_true",
+                   help="record the dot under the crosshair as the homing reference (once)")
+    p.add_argument("--no-g28", action="store_true", help="skip G28: only re-reference on the dot")
+    add_dot_args(p)
+
     p = sub.add_parser("light-test"); p.add_argument("--n", type=int, default=3)
     p = sub.add_parser("inspect-up")
     p.add_argument("--size", type=float, nargs=2, metavar=("L", "W"), help="expected part body, mm")
@@ -298,5 +364,5 @@ def main():
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
-     "repeatability": cmd_repeatability,
+     "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)

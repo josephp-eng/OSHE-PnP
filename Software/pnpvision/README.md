@@ -25,6 +25,11 @@ Z on this machine: 0 = homed at the top, larger Z = nozzle lower
    camera needs no mechanical squaring. Re-run it after moving or remounting the camera.
    `python -m pnpvision repeatability --n 20`   (same dot: travel away and back, measure landing scatter;
    add `--home-every 5` to include X/Y re-homing; results saved in results/)
+   **Visual homing** (X/Y homing is sensorless and lands up to ~2 mm off; one fixed dot fixes that):
+   `python -m pnpvision home --teach --polarity bright --thresh 230`   (once: homed, datum dot 0 under the crosshair)
+   `python -m pnpvision home`   (from then on, instead of plain G28: G28 X Y, centre on the dot,
+   SET_KINEMATIC_POSITION to the taught XY; errors logged to results/visual_home_log.csv)
+   The taught XY defines the machine frame for everything measured after it; teach before step 4.
 4. `python -m pnpvision calibrate-motion --cam up --find-center`
 5. `python -m pnpvision calibrate-offset`      (camera-to-nozzle offset; repeat 3-5x)
 6. `python -m pnpvision datum --teach`       (jog down cam so the whole grid is centred and sharp)

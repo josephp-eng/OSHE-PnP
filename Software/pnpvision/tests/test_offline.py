@@ -215,6 +215,39 @@ def test_repeatability_finds_backlash():
     assert s["noise_floor_mm"][0] < 0.005, s
 
 
+def test_visual_home_removes_homing_offset():
+    """Sim: each home() shifts the frame by up to 2 mm (like sensorless homing). After
+    visual_home, commanding the taught XY must put the camera back over the dot."""
+    from pnpvision.servo import visual_home
+    M_true = np.array([[-58.7, 0.5], [0.6, 59.2]]) * (40 / 59)
+    taught = (15.2, 104.2)
+    w = World(M_true, dot_mm=taught)              # dot sits at the taught XY (frame at teach time)
+    st = {"cmd": np.array([10.0, 10.0]), "off": np.zeros(2)}
+    rng = np.random.default_rng(3)
+
+    def move_abs(x=None, y=None, z=None):
+        st["cmd"] = np.array([x, y], float)
+        w.cam = st["cmd"] + st["off"]            # physical = commanded + frame offset
+
+    def home():
+        st["off"] = rng.uniform(-2, 2, 2)
+        move_abs(10.0, 10.0)
+
+    def set_xy(x, y):                              # SET_KINEMATIC_POSITION: same physical spot
+        phys = st["cmd"] + st["off"]
+        st["cmd"] = np.array([x, y], float)
+        st["off"] = phys - st["cmd"]
+
+    locate = lambda f: find_circle(f, 15, 120)
+    for _ in range(3):
+        res = visual_home(w.grab, locate, MotionMap(M_true, "camera"), (640, 360), move_abs,
+                          lambda: (*st["cmd"], 5.0), set_xy, taught, home=home, log=lambda *a: None)
+        assert np.linalg.norm(res["homing_error_mm"]) < 3, res
+        assert np.linalg.norm(st["off"]) < 0.02, st["off"]      # frame restored
+        move_abs(60.0, 80.0); move_abs(*taught)
+        assert np.linalg.norm(w.cam - w.dot) < 0.02
+
+
 def test_measure_part_up_camera():
     img = np.full((720, 1280), 60, np.uint8)
     rect = ((650.0, 350.0), (80.0, 40.0), 30.0)      # 80x40 px part rotated 30 deg
