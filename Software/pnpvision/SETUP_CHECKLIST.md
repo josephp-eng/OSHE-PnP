@@ -20,6 +20,8 @@ with `~/venv-pnp/bin/python -m pnpvision ...`. Status reflects the OSHE-PnP prot
 ## Machine-specific settings to record
 - `config.toml`: travel limits, `safe_travel_z` (larger Z = nozzle lower on this machine), crowsnest snapshot URLs, camera width/height (must match crowsnest **and** the `.npz`), light macros.
 - Homing dot detector settings: a white dot on a sparkly or textured print needs a fixed threshold (`--polarity bright --thresh 230`); automatic thresholding failed there.
+- Datum detector cut-offs in `config.toml` `[datum]`: `grid_threshold` (grid lines) and `dot_threshold` (white dots) differ; check both with a snapshot after reprinting or relighting the datum.
+- Moving or reseating the datum moves the homing dot: re-teach visual homing (`home --teach`), then `datum --teach`; the camera-to-nozzle offset and motion map are unaffected.
 - Sensorless homing (printer.cfg): with `driver_SGT 2`, homing at 20 mm/s or 0.8 A false-triggered (stopped early); 40 mm/s at 1.0 A works. Tune SGT before making homing gentler.
 
 ## Lessons worth keeping in the docs

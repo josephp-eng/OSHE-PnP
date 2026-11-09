@@ -106,7 +106,7 @@ def detect_cells(img, g, area_tol=0.35, threshold=None):
 
 
 def detect_dots(img, dot_r_px, threshold=None):
-    return find_circles(img, 0.6 * dot_r_px, 1.6 * dot_r_px, 0.85,
+    return find_circles(img, 0.6 * dot_r_px, 1.6 * dot_r_px, 0.80,
                         polarity="bright", external_only=True, threshold=threshold)
 
 
@@ -147,12 +147,13 @@ def pick_by_prior(fits, prior_rot_deg):
 
 # ---- multi-view procedure ------------------------------------------------------------
 def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
-                  dot_r_px, principal_px, dot_tol_mm=1.0, threshold=None):
+                  dot_r_px, principal_px, dot_tol_mm=3.0, grid_threshold=None,
+                  dot_threshold=None, center_tol_mm=0.01, max_center_iter=4):
     """view(x, y) -> undistorted image after moving the TOOLHEAD to (x, y) and settling.
     to_machine(px_xy, x, y) -> machine mm of that pixel for that toolhead position.
     Returns dict(pose, grid_pose, dots_mm_measured, rms_mm)."""
     x, y = grid_view_xy
-    cells_px = detect_cells(view(x, y), g, threshold=threshold)
+    cells_px = detect_cells(view(x, y), g, threshold=grid_threshold)
     if cells_px is None:
         raise DatumError("grid cells not found (is the grid in view, in focus, and lit?)")
     cells_mm = np.array([to_machine(p, x, y) for p in cells_px])
@@ -164,13 +165,21 @@ def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
     dots_meas = []
     for k, d in enumerate(g.dots_mm):
         pred = to_machine_xy(grid, d)
-        tx, ty = pred - np.asarray(cam_offset, float)        # toolhead XY that centres the dot
-        found = detect_dots(view(tx, ty), dot_r_px, threshold)
-        if not found:
-            raise DatumError(f"dot {k} not found near predicted position {pred.round(2)}")
-        c = min(found, key=lambda c: np.hypot(c.center_px[0] - principal_px[0],
-                                              c.center_px[1] - principal_px[1]))
-        m = np.asarray(to_machine(c.center_px, tx, ty), float)
+        # Centre the camera on the dot (like visual homing) instead of reading it off the
+        # image: on the optical axis neither image scale nor feature height matters, so the
+        # dot positions come from machine moves alone.
+        target = pred
+        for it in range(max_center_iter):
+            tx, ty = np.asarray(target, float) - np.asarray(cam_offset, float)
+            found = detect_dots(view(tx, ty), dot_r_px, dot_threshold)
+            if not found:
+                raise DatumError(f"dot {k} not found near predicted position {pred.round(2)}")
+            c = min(found, key=lambda c: np.hypot(c.center_px[0] - principal_px[0],
+                                                  c.center_px[1] - principal_px[1]))
+            m = np.asarray(to_machine(c.center_px, tx, ty), float)
+            if np.linalg.norm(m - target) <= center_tol_mm:
+                break
+            target = m
         if np.linalg.norm(m - pred) > dot_tol_mm:
             raise DatumError(f"dot {k} is {np.linalg.norm(m - pred):.2f} mm from prediction "
                              "(wrong orientation prior, or wrong geometry)")
@@ -179,5 +188,7 @@ def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
         dst.append(m[None])
     pose = umeyama(np.vstack(src), np.vstack(dst))
     pose["grid_only"] = {k: grid[k] for k in ("s", "rot_deg", "rms_mm", "pitch_meas_mm")}
+    dots = umeyama(np.asarray(g.dots_mm, float), np.array(dots_meas))
+    pose["dots_only"] = {k: dots[k] for k in ("s", "rot_deg", "rms_mm")}
     pose["dots_mm_measured"] = np.array(dots_meas)
     return pose

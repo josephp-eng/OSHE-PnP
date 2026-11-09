@@ -268,10 +268,19 @@ def cmd_datum(cfg, a):
 
         r_px = g.dot_diameter_mm / 2 / motion.mm_per_px
         pose = measure_datum(view, to_m, g, (gx, gy), off, cfg["datum"]["expected_rotation_deg"],
-                             r_px, principal, threshold=cfg["datum"].get("threshold"))
+                             r_px, principal, grid_threshold=cfg["datum"].get("grid_threshold"),
+                             dot_threshold=cfg["datum"].get("dot_threshold"))
         print(f"datum rotation {pose['rot_deg']:.3f} deg, scale {pose['s']:.5f}, "
               f"fit rms {pose['rms_mm']:.4f} mm, origin at machine XY {pose['t'].round(3)}")
-        print("grid-only fit:", {k: round(v, 4) for k, v in pose["grid_only"].items()})
+        print("grid-only fit:", {k: round(v, 4) for k, v in pose["grid_only"].items()},
+              "(grid read off ONE image: its scale depends on image scale at the datum's height)")
+        print("dots-only fit:", {k: round(v, 4) for k, v in pose["dots_only"].items()},
+              "(each dot centred: scale = machine mm vs design mm, independent of height)")
+        dm = pose["dots_mm_measured"]
+        for (i, j) in ((0, 1), (0, 2), (1, 2)):
+            design = float(np.linalg.norm(np.subtract(g.dots_mm[j], g.dots_mm[i])))
+            meas = float(np.linalg.norm(dm[j] - dm[i]))
+            print(f"  dot {i}-{j}: measured {meas:.3f} mm, design {design:.3f} mm ({(meas / design - 1) * 100:+.2f}%)")
         up = np.array(ms["up_cam_xy_mm"], float)
         if a.reference:
             if not up.any():
