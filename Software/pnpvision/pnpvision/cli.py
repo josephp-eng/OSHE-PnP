@@ -268,7 +268,7 @@ def cmd_datum(cfg, a):
 
         r_px = g.dot_diameter_mm / 2 / motion.mm_per_px
         pose = measure_datum(view, to_m, g, (gx, gy), off, cfg["datum"]["expected_rotation_deg"],
-                             r_px, principal)
+                             r_px, principal, threshold=cfg["datum"].get("threshold"))
         print(f"datum rotation {pose['rot_deg']:.3f} deg, scale {pose['s']:.5f}, "
               f"fit rms {pose['rms_mm']:.4f} mm, origin at machine XY {pose['t'].round(3)}")
         print("grid-only fit:", {k: round(v, 4) for k, v in pose["grid_only"].items()})

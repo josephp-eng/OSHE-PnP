@@ -67,11 +67,17 @@ def to_datum_xy(pose, m):
 
 
 # ---- image level ---------------------------------------------------------------------
-def detect_cells(img, g, area_tol=0.35):
-    """Pixel centroids of the g.cols*g.rows enclosed dark cells, or None."""
+def detect_cells(img, g, area_tol=0.35, threshold=None):
+    """Pixel centroids of the g.cols*g.rows enclosed dark cells, or None.
+    threshold: None = automatic (Otsu); a number 0-255 = fixed cut-off for the white lines.
+    Our printed datum is sparkly: Otsu lands at ~142 and the glints merge with the lines,
+    while a fixed ~230 isolates them cleanly."""
     gray = img if img.ndim == 2 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     gray = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)   # white lines
+    if threshold is None:
+        _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)   # white lines
+    else:
+        _, bw = cv2.threshold(gray, float(threshold), 255, cv2.THRESH_BINARY)
     cnts, hier = cv2.findContours(bw, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
     if hier is None:
         return None
@@ -88,7 +94,7 @@ def detect_cells(img, g, area_tol=0.35):
     if best is None:
         return None
     areas = np.array([cv2.contourArea(cnts[k]) for k in best])
-    med = np.median(areas)
+    med = np.median(np.sort(areas)[-n:])   # cells are the n largest holes; glints make tiny ones
     keep = [k for k, a in zip(best, areas) if abs(a - med) <= area_tol * med]
     if len(keep) != n:
         return None
@@ -99,9 +105,9 @@ def detect_cells(img, g, area_tol=0.35):
     return np.array(pts)
 
 
-def detect_dots(img, dot_r_px):
+def detect_dots(img, dot_r_px, threshold=None):
     return find_circles(img, 0.6 * dot_r_px, 1.6 * dot_r_px, 0.85,
-                        polarity="bright", external_only=True)
+                        polarity="bright", external_only=True, threshold=threshold)
 
 
 # ---- lattice labelling in machine mm -------------------------------------------------
@@ -141,12 +147,12 @@ def pick_by_prior(fits, prior_rot_deg):
 
 # ---- multi-view procedure ------------------------------------------------------------
 def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
-                  dot_r_px, principal_px, dot_tol_mm=1.0):
+                  dot_r_px, principal_px, dot_tol_mm=1.0, threshold=None):
     """view(x, y) -> undistorted image after moving the TOOLHEAD to (x, y) and settling.
     to_machine(px_xy, x, y) -> machine mm of that pixel for that toolhead position.
     Returns dict(pose, grid_pose, dots_mm_measured, rms_mm)."""
     x, y = grid_view_xy
-    cells_px = detect_cells(view(x, y), g)
+    cells_px = detect_cells(view(x, y), g, threshold=threshold)
     if cells_px is None:
         raise DatumError("grid cells not found (is the grid in view, in focus, and lit?)")
     cells_mm = np.array([to_machine(p, x, y) for p in cells_px])
@@ -159,7 +165,7 @@ def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
     for k, d in enumerate(g.dots_mm):
         pred = to_machine_xy(grid, d)
         tx, ty = pred - np.asarray(cam_offset, float)        # toolhead XY that centres the dot
-        found = detect_dots(view(tx, ty), dot_r_px)
+        found = detect_dots(view(tx, ty), dot_r_px, threshold)
         if not found:
             raise DatumError(f"dot {k} not found near predicted position {pred.round(2)}")
         c = min(found, key=lambda c: np.hypot(c.center_px[0] - principal_px[0],

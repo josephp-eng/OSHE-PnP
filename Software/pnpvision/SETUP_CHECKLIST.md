@@ -1,0 +1,30 @@
+# Per-machine vision setup checklist
+
+Working notes for the build documentation: every step a builder has to run on **their own**
+machine, in order, and when to redo it. Commands run on the Pi from `Software/pnpvision`
+with `~/venv-pnp/bin/python -m pnpvision ...`. Status reflects the OSHE-PnP prototype.
+
+| # | Step | Command / tool | Why it is per machine | Redo when | Status |
+|---|---|---|---|---|---|
+| 1 | Pi software | `python3 -m venv ~/venv-pnp`, `pip install --only-binary=:all: -r requirements.txt` | - | new Pi / OS | done |
+| 2 | Lens calibration, each camera | `calib_capture.py` (ChArUco 7x5, 8 mm squares, 6 mm markers, DICT_4X4), copy the `.npz` into `calibration/`, then `check-lens` | every lens and sensor differs | lens refocused or swapped, camera resolution changed in crowsnest | done (down, up) |
+| 3 | Undistorted Mainsail views + reticle | `undistort-down` / `undistort-up` services (`undistort_stream.py`, add `--motion` for mm ticks) | uses that machine's `.npz` and motion map | after steps 2 or 4 (restart the service) | done |
+| 4 | Down-camera motion map | `calibrate-motion --cam down --step 3` on a dark ~3 mm dot, flat and **fixed**, at **PCB-top height** | camera scale, rotation and mirroring depend on the mount (ours: 0.5 deg rotated, ~59 px/mm) | camera moved or refocused | done |
+| 5 | Repeatability check (diagnostic) | `repeatability --n 20` on a fixed dot; `--home-every 5` to test homing | belts, motors, frame | mechanical changes, accuracy problems | done (~0.01 mm; sensorless homing 0.1-2 mm) |
+| 6 | Visual homing, teach once | `home --teach --polarity bright --thresh 230` with datum dot 0 under the crosshair; then use `home` instead of G28 | sensorless X/Y homing lands up to ~2 mm off; the taught XY **defines the machine frame** | datum or down camera moved (then redo every step below) | done |
+| 7 | Down-camera to nozzle offset | `calibrate-offset` (nozzle over a dot by eye, 3 runs); later refine by placing parts and measuring | camera and nozzle-holder mounting | camera or nozzle holder moved | done by eye on datum dot 0 (4 runs, spread +-0.04 mm): (8.056, 53.112) vs CAD (7.71, 53.04) |
+| 8 | Up-camera motion map + centre | `calibrate-motion --cam up --find-center` | up-camera mount | up camera moved | pending (mount being reprinted) |
+| 9 | Datum teach / reference | `datum --teach`, `datum --reference` | datum placement on the plate | datum moved | pending |
+| 10 | Up-camera light | `[lighting.up]` in `config.toml` | wiring differs | - | pending (not wired) |
+
+## Machine-specific settings to record
+- `config.toml`: travel limits, `safe_travel_z` (larger Z = nozzle lower on this machine), crowsnest snapshot URLs, camera width/height (must match crowsnest **and** the `.npz`), light macros.
+- Homing dot detector settings: a white dot on a sparkly or textured print needs a fixed threshold (`--polarity bright --thresh 230`); automatic thresholding failed there.
+- Sensorless homing (printer.cfg): with `driver_SGT 2`, homing at 20 mm/s or 0.8 A false-triggered (stopped early); 40 mm/s at 1.0 A works. Tune SGT before making homing gentler.
+
+## Lessons worth keeping in the docs
+- Calibration targets must not move: a loose paper dot slid ~0.05 mm during fast moves and showed up as a fake machine error. Tape or glue it, or use a bolted feature.
+- The motion map absorbs camera rotation, mirroring and any X/Y scale difference, so cameras need no mechanical squaring.
+- Undistorted images use square pixels (`square_new_K`); OpenCV's default made round dots look 24% oval.
+- Addressable-LED data lines run in an unshielded harness next to steppers can corrupt colours (our white down light flickers purple). Fixes: GND wire twisted with data, 220-470 ohm series resistor, 100-1000 uF across LED power, 3.3->5 V level shifter. Matters for vision: purple light makes white features much darker in greyscale.
+- Measure features after centring them on the crosshair (the optical axis): there, a height difference does not shift the position.

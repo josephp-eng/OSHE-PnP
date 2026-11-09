@@ -82,6 +82,10 @@ dot_diameter_mm = 3.0           # confirmed, +- print tolerance
 # Rotation of the datum's +X axis relative to machine +X (degrees, CCW from above).
 # Only needs to be right to +-45 deg; it resolves the grid's 180-degree symmetry.
 expected_rotation_deg = 0.0
+# Fixed 0-255 black/white cut-off for the grid lines and white dots. The printed datum is
+# sparkly under the LEDs: on 2026-11-09 grid cells were found at 200-230 (not 240) and the white
+# dots at 210-245, so 215 sits safely in both ranges. Remove = automatic (Otsu).
+threshold = 215
 [layout]
 # Fixed fixtures on the 290 x 290 mm staging plate. PLATE frame: mm from the plate's
 # front-left corner. Heat-set inserts every 30 mm from (10, 10) to (280, 280), so insert
