@@ -174,7 +174,27 @@ def cmd_repeatability(cfg, a):
 
 
 def cmd_home(cfg, a):
-    """Visual homing on a fixed dot (datum dot 0). --teach once; then use instead of plain G28."""
+    """Visual homing on a fixed dot (datum dot 0). --teach once; then use instead of plain G28.
+    --notify: also report the result in the Mainsail console (used by the VISION_HOME macro,
+    which starts this in the background and so cannot show its output)."""
+    if not a.notify:
+        return _home(cfg, a)
+    mr = make_mr(cfg)
+
+    def respond(msg, error=False):
+        msg = " ".join(str(msg).replace('"', "'").split())[:250]
+        try:
+            mr.gcode(f'RESPOND {"TYPE=error " if error else ""}MSG="{msg}"')
+        except Exception:
+            pass
+    try:
+        respond("VISION_HOME: " + _home(cfg, a))
+    except BaseException as e:            # SystemExit too: those carry the useful message
+        respond(f"VISION_HOME FAILED: {e}", error=True)
+        raise
+
+
+def _home(cfg, a):
     mr = make_mr(cfg)
     ms_path = C.rel(cfg, "calibration/machine.json")
     cam, lens = open_cam(cfg, "down")
@@ -198,7 +218,7 @@ def cmd_home(cfg, a):
             print(f"taught homing dot at X{x:.4f} Y{y:.4f} (saved in {ms_path}).\n"
                   "This XY now DEFINES the machine frame: positions measured later (up camera, "
                   "feeders, boards) are only valid against it, so don't re-teach casually.")
-            return
+            return f"taught homing dot at X{x:.4f} Y{y:.4f}"
         vh = MS.load(ms_path).get("visual_home")
         if not vh:
             raise SystemExit("run `home --teach` first")
@@ -218,9 +238,11 @@ def cmd_home(cfg, a):
         out = visual_home(grab, locate, motion, target, mr.move_abs, mr.position, set_xy,
                           vh["xy"], home=home)
         d = locate(grab())                          # check: no move, dot should sit on target
+        check = "check: dot not found"
         if d is not None:
             chk = motion.offset_mm(np.array(d.center_px) - target)
             print(f"check after reset: dot {np.linalg.norm(chk):.4f} mm from the crosshair")
+            check = f"check {np.linalg.norm(chk):.4f} mm"
         path = C.rel(cfg, "results/visual_home_log.csv")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         new = not os.path.exists(path)
@@ -229,6 +251,8 @@ def cmd_home(cfg, a):
                 f.write("time,g28,homing_error_x_mm,homing_error_y_mm\n")
             e = out["homing_error_mm"]
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')},{home is not None},{e[0]:.4f},{e[1]:.4f}\n")
+        return (f"OK, frame was off X{e[0]:+.3f} Y{e[1]:+.3f} mm, reset to "
+                f"X{vh['xy'][0]:.3f} Y{vh['xy'][1]:.3f}, {check}")
     finally:
         cam.stop()
 
@@ -360,6 +384,7 @@ def main():
     p.add_argument("--teach", action="store_true",
                    help="record the dot under the crosshair as the homing reference (once)")
     p.add_argument("--no-g28", action="store_true", help="skip G28: only re-reference on the dot")
+    p.add_argument("--notify", action="store_true", help="also report the result in the Mainsail console")
     add_dot_args(p)
 
     p = sub.add_parser("light-test"); p.add_argument("--n", type=int, default=3)
