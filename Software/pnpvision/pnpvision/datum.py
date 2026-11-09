@@ -186,9 +186,12 @@ def measure_datum(view, to_machine, g, grid_view_xy, cam_offset, prior_rot_deg,
         dots_meas.append(m)
         src.append(np.asarray(d, float)[None])
         dst.append(m[None])
-    pose = umeyama(np.vstack(src), np.vstack(dst))
+    # The pose comes from the centred dots only. The grid is read off one image, so its scale
+    # depends on the datum's height: with the down camera only ~11.5 mm from the work (f 681 px
+    # / 59 px/mm), 1 mm of height changes image scale ~9%, and our grid read 4% big. It is only
+    # used to find the dots. (src/dst still hold grid + dots for diagnostics.)
+    pose = umeyama(np.asarray(g.dots_mm, float), np.array(dots_meas))
     pose["grid_only"] = {k: grid[k] for k in ("s", "rot_deg", "rms_mm", "pitch_meas_mm")}
-    dots = umeyama(np.asarray(g.dots_mm, float), np.array(dots_meas))
-    pose["dots_only"] = {k: dots[k] for k in ("s", "rot_deg", "rms_mm")}
+    pose["dots_only"] = {k: pose[k] for k in ("s", "rot_deg", "rms_mm")}
     pose["dots_mm_measured"] = np.array(dots_meas)
     return pose

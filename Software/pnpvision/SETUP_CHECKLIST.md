@@ -14,7 +14,7 @@ with `~/venv-pnp/bin/python -m pnpvision ...`. Status reflects the OSHE-PnP prot
 | 6 | Visual homing, teach once | `home --teach --polarity bright --thresh 230` with datum dot 0 under the crosshair; then use `home` instead of G28 | sensorless X/Y homing lands up to ~2 mm off; the taught XY **defines the machine frame** | datum or down camera moved (then redo every step below) | done |
 | 7 | Down-camera to nozzle offset | `calibrate-offset` (nozzle over a dot by eye, 3 runs); later refine by placing parts and measuring | camera and nozzle-holder mounting | camera or nozzle holder moved | done by eye on datum dot 0 (4 runs, spread +-0.04 mm): (8.056, 53.112) vs CAD (7.71, 53.04) |
 | 8 | Up-camera motion map + centre | `calibrate-motion --cam up --find-center` | up-camera mount | up camera moved | pending (mount being reprinted) |
-| 9 | Datum teach / reference | `datum --teach`, `datum --reference` | datum placement on the plate | datum moved | pending |
+| 9 | Datum teach / reference | `datum --teach`, `datum --reference` | datum placement on the plate | datum moved | teach + measure done (dots fit rms 0.044 mm, rotation ~0 after reseat); `--reference` waits for the up camera |
 | 10 | Up-camera light | `[lighting.up]` in `config.toml` | wiring differs | - | pending (not wired) |
 
 ## Machine-specific settings to record
@@ -29,4 +29,5 @@ with `~/venv-pnp/bin/python -m pnpvision ...`. Status reflects the OSHE-PnP prot
 - The motion map absorbs camera rotation, mirroring and any X/Y scale difference, so cameras need no mechanical squaring.
 - Undistorted images use square pixels (`square_new_K`); OpenCV's default made round dots look 24% oval.
 - Addressable-LED data lines run in an unshielded harness next to steppers can corrupt colours (our white down light flickers purple). Fixes: GND wire twisted with data, 220-470 ohm series resistor, 100-1000 uF across LED power, 3.3->5 V level shifter. Matters for vision: purple light makes white features much darker in greyscale.
+- The down camera is only ~11.5 mm from the work (undistorted f 681 px / 59 px per mm), so image scale changes ~9% per mm of height: the datum grid (about 0.5 mm off the calibration height) read 4% big, and a 1 deg tilt visibly makes it trapezoidal. Positions must come from centring features, not from reading them off-centre in the image.
 - Measure features after centring them on the crosshair (the optical axis): there, a height difference does not shift the position.
