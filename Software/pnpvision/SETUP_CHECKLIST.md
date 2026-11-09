@@ -16,7 +16,7 @@ with `~/venv-pnp/bin/python -m pnpvision ...`. Status reflects the OSHE-PnP prot
 | 7 | Down-camera to nozzle offset | `calibrate-offset` (nozzle over a dot by eye, 3 runs); later refine by placing parts and measuring | camera and nozzle-holder mounting | camera or nozzle holder moved | done by eye on datum dot 0 (4 runs, spread +-0.04 mm): (8.056, 53.112) vs CAD (7.71, 53.04) |
 | 8 | Up-camera motion map + centre | `calibrate-motion --cam up --find-center` | up-camera mount | up camera moved | pending (mount being reprinted) |
 | 9 | Datum teach / reference | `datum --teach`, `datum --reference` | datum placement on the plate | datum moved | teach + measure done (dots fit rms 0.044 mm, rotation ~0 after reseat); `--reference` waits for the up camera |
-| 10 | Up-camera light | `[lighting.up]` in `config.toml` | wiring differs | - | pending (not wired) |
+| 10 | Up-camera light | 6 x WS2812 ring on a free endstop port (ours STOP5 = PG13, lent by the feeder servo; port order 5V / GND / data; later maybe a Pico as a second Klipper MCU), `[neopixel up_light]` + `UP_LIGHT_ON/OFF` in printer.cfg, `[lighting.up] type = "klipper_led"` in `config.toml` | free pins differ per build (sensorless homing uses STOP0-2 via DIAG jumpers even with nothing plugged in) | - | configured, not yet tested |
 
 ## Machine-specific settings to record
 - `config.toml`: travel limits, `safe_travel_z` (larger Z = nozzle lower on this machine), crowsnest snapshot URLs, camera width/height (must match crowsnest **and** the `.npz`), light macros.
