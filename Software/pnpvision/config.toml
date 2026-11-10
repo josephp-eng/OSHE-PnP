@@ -49,7 +49,7 @@ settle_s = 0.3                  # wait for the LEDs and camera exposure to settl
 
 [lighting.up]                   # light rig that illuminates the part on the nozzle
 type = "klipper_led"            # none | klipper_pin | klipper_led | gpio
-name = "up_light"               # [neopixel up_light] in printer.cfg: 6 x WS2812 on STOP5 (PG13)
+name = "up_light"               # [neopixel up_light] in printer.cfg: 6 x WS2812 on EXP1_8 (PE15)
 level = 1.0                     # 0..1 (PWM); use 1.0 for plain on/off pins
 settle_s = 0.20                 # wait after switching, before the frame that counts
 ambient_subtract = false        # also grab a light-off frame and subtract it
