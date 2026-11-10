@@ -43,7 +43,12 @@ class Moonraker:
         if not (lo <= v <= hi):
             raise MoveRefused(f"{axis}={v:.3f} outside software limit [{lo}, {hi}]")
 
-    def move_abs(self, x=None, y=None, z=None, feedrate=None):
+    # Largest X/Y move allowed with stay_low=True (nozzle left below safe_travel_z).
+    MAX_LOW_XY_MM = 3.0
+
+    def move_abs(self, x=None, y=None, z=None, feedrate=None, stay_low=False):
+        """stay_low: small X/Y jogs (<= MAX_LOW_XY_MM) at the CURRENT height, without the
+        safety lift. For centring the nozzle over the up camera at its focus height."""
         if not self.is_homed():
             raise MoveRefused("axes not homed")
         for axis, v in (("x", x), ("y", y), ("z", z)):
@@ -54,7 +59,13 @@ class Moonraker:
         xy = [f"{a.upper()}{v:.4f}" for a, v, c in (("x", x, cx), ("y", y, cy))
               if v is not None and abs(v - c) > 1e-6]
         lines = ["G90"]
-        if xy and self.safe_travel_z is not None and cz > self.safe_travel_z + 1e-6:
+        low = xy and self.safe_travel_z is not None and cz > self.safe_travel_z + 1e-6
+        if low and stay_low:
+            d = ((x if x is not None else cx) - cx) ** 2 + ((y if y is not None else cy) - cy) ** 2
+            if d ** 0.5 > self.MAX_LOW_XY_MM:
+                raise MoveRefused(f"stay_low X/Y move of {d ** 0.5:.2f} mm is over the "
+                                  f"{self.MAX_LOW_XY_MM} mm limit for moves below Z{self.safe_travel_z}")
+        elif low:
             # nozzle is below travel height: lift straight up before moving sideways
             lines.append(f"G1 Z{self.safe_travel_z:.4f} F{f:.0f}")
         if xy:
@@ -66,7 +77,7 @@ class Moonraker:
             return
         self.gcode("\n".join(lines + ["M400"]))
 
-    def move_rel(self, dx=0.0, dy=0.0, dz=0.0, feedrate=None):
+    def move_rel(self, dx=0.0, dy=0.0, dz=0.0, feedrate=None, stay_low=False):
         x, y, z = self.position()
         self.move_abs(x + dx if dx else None, y + dy if dy else None,
-                      z + dz if dz else None, feedrate)
+                      z + dz if dz else None, feedrate, stay_low=stay_low)

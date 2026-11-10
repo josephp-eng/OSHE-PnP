@@ -12,7 +12,7 @@ from . import machine_state as MS
 from .camera import Camera, SnapshotCamera
 from .datum import DatumGeometry, measure_datum, to_datum_xy, to_machine_xy
 import numpy as np
-from .detect import find_circle
+from .detect import find_circle, find_circles
 from .lens import LensModel
 from .moonraker import Moonraker
 from .motion import MotionMap
@@ -85,6 +85,32 @@ def cmd_snapshot(cfg, a):
         cam.stop()
 
 
+def cmd_find_dot(cfg, a):
+    """One frame, no moves: list the round blobs the detector sees, with the chosen one
+    marked, so --rmin/--rmax/--polarity/--thresh can be tuned before a real command."""
+    cam, lens = open_cam(cfg, a.cam)
+    try:
+        img = lens.undistort(cam.fresh(settle_s=cfg["moonraker"]["settle_s"]))
+    finally:
+        cam.stop()
+    found = find_circles(img, a.rmin, a.rmax, polarity=a.polarity, threshold=a.thresh)
+    principal = np.array([lens.newK[0, 2], lens.newK[1, 2]])
+    mpath = C.rel(cfg, cfg["cameras"][a.cam]["motion_map"])
+    motion = MotionMap.load(mpath) if os.path.exists(mpath) else None
+    out = img.copy()
+    cv2.drawMarker(out, tuple(int(v) for v in principal), (0, 255, 255), cv2.MARKER_CROSS, 40, 1)
+    print(f"{len(found)} round blob(s), best first (crosshair at {principal.round(1)}):")
+    for i, c in enumerate(found[:8]):
+        d = np.array(c.center_px) - principal
+        mm = f"  = {motion.offset_mm(d).round(3)} mm" if motion else ""
+        print(f"  {'*' if i == 0 else ' '} centre {np.round(c.center_px, 1)}  r {c.radius_px:.1f} px  "
+              f"circ {c.circularity:.3f}  from crosshair {d.round(1)} px{mm}")
+        col = (0, 0, 255) if i == 0 else (255, 128, 0)
+        cv2.circle(out, tuple(int(v) for v in c.center_px), int(c.radius_px), col, 2 if i == 0 else 1)
+    cv2.imwrite(a.out, out)
+    print("wrote", a.out, "(red = the one commands would use)")
+
+
 def cmd_calibrate_motion(cfg, a):
     mr = make_mr(cfg)
     cam, lens = open_cam(cfg, a.cam)
@@ -93,17 +119,27 @@ def cmd_calibrate_motion(cfg, a):
         grab = lambda: lens.undistort(cam.fresh(settle_s=settle))
         locate = dot_locator(a)
         moving = "camera" if a.cam == "down" else "target"
-        mmap = calibrate_motion(grab, locate, mr.move_rel, a.step, moving)
+        if a.cam == "up":
+            # The nozzle tip is only sharp low over the up camera (below safe_travel_z), so
+            # jog at the current height instead of lifting before every move.
+            if 2 * a.step > mr.MAX_LOW_XY_MM:
+                raise SystemExit(f"--step {a.step} too big for low jogs (max {mr.MAX_LOW_XY_MM / 2} mm)")
+            move = lambda dx, dy: mr.move_rel(dx, dy, stay_low=True)
+            z0 = mr.position()[2]
+            print(f"up camera: calibrating with the nozzle tip at Z{z0:.3f} (jogs stay at this height)")
+        else:
+            move = mr.move_rel
+        mmap = calibrate_motion(grab, locate, move, a.step, moving)
         print(json.dumps(mmap.describe(), indent=2))
         mmap.save(C.rel(cfg, cfg["cameras"][a.cam]["motion_map"]))
         if a.cam == "up" and a.find_center:
             target = (lens.newK[0, 2], lens.newK[1, 2])
-            res = center_on(grab, locate, mr.move_rel, mmap, target)
+            res = center_on(grab, locate, move, mmap, target, max_step_mm=mr.MAX_LOW_XY_MM * 0.8)
             print("centering:", res)
             if res["converged"]:
-                x, y, _ = mr.position()
-                MS.save(C.rel(cfg, "calibration/machine.json"), up_cam_xy_mm=[x, y])
-                print("up camera optical axis at machine XY", (x, y))
+                x, y, z = mr.position()
+                MS.save(C.rel(cfg, "calibration/machine.json"), up_cam_xy_mm=[x, y], up_cam_focus_z=z)
+                print("up camera optical axis at machine XY", (x, y), "nozzle tip in focus at Z", z)
     finally:
         cam.stop()
 
@@ -363,6 +399,10 @@ def main():
 
     p = sub.add_parser("check-lens"); p.add_argument("--cam", default="both", choices=["up", "down", "both"])
     p = sub.add_parser("snapshot"); p.add_argument("--cam", required=True, choices=["up", "down"]); p.add_argument("--out", default="snap"); p.add_argument("--lit", action="store_true", help="(up) use the light rig")
+    p = sub.add_parser("find-dot", help="no moves: show which round blobs the detector finds")
+    p.add_argument("--cam", required=True, choices=["up", "down"])
+    p.add_argument("--out", default="find_dot.png")
+    add_dot_args(p)
     p = sub.add_parser("calibrate-motion")
     p.add_argument("--cam", required=True, choices=["up", "down"])
     p.add_argument("--step", type=float, default=1.0, help="jog size, mm")
@@ -396,7 +436,7 @@ def main():
 
     a = ap.parse_args()
     cfg = C.load(a.config)
-    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot,
+    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)
