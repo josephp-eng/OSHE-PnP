@@ -68,14 +68,17 @@ class PartMeasure:
     area_px: float
 
 
-def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.72,
+def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.8,
                      angles=tuple(range(0, 360, 12)), quarter_turns=(0,), scale=1.0, max_hits=20,
-                     _cropped=False):
+                     mask=None, _cropped=False):
     """Places where `template` (a picture of one part) appears in `img`, best first.
     Returns [(center_px (x, y) in img pixels, score 0..1)]. Normalised correlation on colour,
     with the template turned in 12 degree steps all the way round, so parts dropped by hand at
-    any orientation still match; copper pads (one flat colour) don't. scale < 1 searches a
-    shrunken copy (fast coarse search); positions are returned in full-size pixels.
+    any orientation still match. scale < 1 searches a shrunken copy (fast coarse search);
+    positions are returned in full-size pixels.
+    mask: 255 where the template is the PART (0 = background). Without it the background
+    around the first part (pads, silkscreen) dominated: a real part on the board scored 0.75;
+    with it 0.92, against 0.69 for the best pad/text (2026-11-11).
     center_px/radius_px: only accept matches within that circle (and only search around it)."""
     if center_px is not None and radius_px is not None and not _cropped:
         # search only a window around the circle: much faster on the Pi than the whole frame
@@ -84,23 +87,33 @@ def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.
         y0 = max(int(center_px[1]) - m, 0)
         win = img[y0:int(center_px[1]) + m, x0:int(center_px[0]) + m]
         hits = find_by_template(win, template, (center_px[0] - x0, center_px[1] - y0), radius_px,
-                                threshold, angles, quarter_turns, scale, max_hits, _cropped=True)
+                                threshold, angles, quarter_turns, scale, max_hits, mask, _cropped=True)
         return [((p[0] + x0, p[1] + y0), s) for p, s in hits]
     small = img if scale == 1.0 else cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
     tpl0 = template if scale == 1.0 else cv2.resize(template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    msk0 = None
+    if mask is not None:
+        msk0 = mask if scale == 1.0 else cv2.resize(mask, (tpl0.shape[1], tpl0.shape[0]),
+                                                    interpolation=cv2.INTER_NEAREST)
     best = None
     for q in quarter_turns:
         tq = np.ascontiguousarray(np.rot90(tpl0, q))
+        mq = None if msk0 is None else np.ascontiguousarray(np.rot90(msk0, q))
         h, w = tq.shape[:2]
         for ang in angles:
             if ang:
                 m = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
                 t = cv2.warpAffine(tq, m, (w, h), borderMode=cv2.BORDER_REPLICATE)
+                mk = None if mq is None else cv2.warpAffine(mq, m, (w, h), flags=cv2.INTER_NEAREST)
             else:
-                t = tq
+                t, mk = tq, mq
             if small.shape[0] < h or small.shape[1] < w:
                 continue
-            r = cv2.matchTemplate(small, t, cv2.TM_CCOEFF_NORMED)
+            if mk is None:
+                r = cv2.matchTemplate(small, t, cv2.TM_CCOEFF_NORMED)
+            else:
+                r = cv2.matchTemplate(small, t, cv2.TM_CCOEFF_NORMED, mask=mk)
+                r[~np.isfinite(r)] = -1.0          # flat areas give NaN/inf with a mask
             pad = np.full((small.shape[0], small.shape[1]), -1.0, np.float32)
             pad[h // 2:h // 2 + r.shape[0], w // 2:w // 2 + r.shape[1]] = r   # index = template centre
             best = pad if best is None else np.maximum(best, pad)

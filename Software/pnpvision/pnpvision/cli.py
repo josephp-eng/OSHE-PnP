@@ -515,8 +515,10 @@ def cmd_place_test(cfg, a):
         principal = np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]])
         k_height = wd / (wd - a.thickness)
         finder = PartFinder(mr, down_grab, down_motion, principal, tuple(a.size), k_height, first,
-                            avoid=targets)
+                            avoid=targets, save=save)
         save("first_part_template", finder.template)
+        if finder.mask is not None:
+            save("first_part_mask", finder.mask)
         results = place_test(
             mr, down_grab, down_motion, principal, up_inspect, ms, finder, targets,
             size_mm=tuple(a.size), thickness_mm=a.thickness, working_distance_mm=wd,

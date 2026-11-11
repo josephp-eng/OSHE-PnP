@@ -19,6 +19,7 @@ error = where it landed minus the target):
 Either way, the mean of that "job error" is what down_cam_offset_mm should be reduced by.
 Hardware is injected (callables), so the whole cycle runs against a simulator in the tests.
 """
+import cv2
 import numpy as np
 
 from .detect import find_by_template, find_placed_part, measure_part
@@ -35,7 +36,9 @@ class PartFinder:
     the match and re-matches near the centre, where the part's height doesn't skew the scale."""
 
     def __init__(self, mr, grab, motion, principal, size_mm, k_height, origin, avoid=(),
-                 threshold=0.72, say=print):
+                 threshold=0.8, say=print, save=None):
+        self.save = save or (lambda name, img: None)
+        self.searches = 0
         self.mr, self.grab, self.motion = mr, grab, motion
         self.principal = np.asarray(principal, float)
         self.k = k_height
@@ -60,6 +63,14 @@ class PartFinder:
             say("  could not measure the first part's centre; using where you aimed")
         cx, cy = int(round(c[0])), int(round(c[1]))
         self.template = img[cy - half:cy + half + 1, cx - half:cx + half + 1].copy()
+        # Match on the part only: its outline (slightly shrunk) as a mask, so the board around
+        # the first part (pads, silkscreen) doesn't have to match around the others.
+        self.mask = None
+        if pm is not None and c is not self.principal:
+            self.mask = np.zeros(self.template.shape[:2], np.uint8)
+            box = cv2.boxPoints(((half + (c[0] - cx), half + (c[1] - cy)),
+                                 (pm.long_px * 0.95, pm.short_px * 0.95), pm.angle_px_deg))
+            cv2.fillPoly(self.mask, [np.round(box).astype(np.int32)], 255)
         self.first = True
 
     def _look(self, xy):
@@ -76,23 +87,35 @@ class PartFinder:
             self.first = False
             return self.origin
         img = self._look(self.origin)
-        hits = find_by_template(img, self.template, threshold=self.threshold, scale=0.25)
+        # all matches down to 0.5, so the saved picture shows near-misses too
+        hits = find_by_template(img, self.template, threshold=0.5, scale=0.25, mask=self.mask)
+        self.searches += 1
+        vis = img.copy()
+        for px, score in hits:
+            col = (0, 255, 0) if score >= self.threshold else (0, 0, 255)
+            cv2.circle(vis, (int(px[0]), int(px[1])), 40, col, 3)
+            cv2.putText(vis, f"{score:.2f}", (int(px[0]) + 45, int(px[1])), cv2.FONT_HERSHEY_SIMPLEX, 1.2, col, 3)
+        self.save(f"search{self.searches}", vis)
         cands = []
         for px, score in hits:
+            if score < self.threshold:
+                continue
             p = self._to_machine(self.origin, px)
             if any(np.linalg.norm(p - q) < 1.0 for q in self.used) or \
                any(np.linalg.norm(p - q) < 2.5 for q in self.avoid):
                 continue
             cands.append((np.linalg.norm(p - self.origin), p, score))
         if not cands:
-            self.say("  no more parts found near the first pick position.")
+            near = ", ".join(f"{s:.2f}" for _, s in hits[:4])
+            self.say(f"  no more parts found near the first pick position (best scores: {near or 'none'}; "
+                     f"need {self.threshold}).")
             return None
         _, p, score = min(cands, key=lambda c: c[0])
         # refine with the camera right over it
         img = self._look(p)
         r_px = 1.5 / self.motion.mm_per_px
         fine = find_by_template(img, self.template, center_px=self.principal, radius_px=r_px,
-                                threshold=self.threshold)
+                                threshold=self.threshold, mask=self.mask)
         if fine:
             p = self._to_machine(p, fine[0][0])
         self.say(f"  next part found at {np.round(p, 3).tolist()} (match {score:.2f}, {len(cands)} left)")

@@ -308,3 +308,23 @@ def test_placed_part_found_on_real_tape_photos():
         assert np.linalg.norm(off - want) < 3.0, (t, off)          # within 0.05 mm
         assert 1.9 < pm.long_px * mpp < 2.3 and 1.25 < pm.short_px * mpp < 1.6, (t, pm)
         assert find_placed_part(a, a, c, 2.5 / mpp, exp) is None   # nothing placed -> nothing found
+
+
+def test_template_finds_part_not_pads_on_real_board():
+    # The first part of one run (template) searched for in a down-camera photo of another part
+    # among bare pads and silkscreen (2026-11-11). Unmasked, the real part only scored 0.75;
+    # matching on the part's own outline it is the clear winner.
+    from pnpvision.detect import find_by_template
+    d = os.path.join(os.path.dirname(__file__), "data")
+    tpl = cv2.imread(os.path.join(d, "first_part_template.png"))
+    img = cv2.imread(os.path.join(d, "pick_area.jpg"))
+    mpp, k = 1 / 58.7, 11.5 / (11.5 - 0.85)
+    c = (tpl.shape[1] / 2 - 0.5, tpl.shape[0] / 2 - 0.5)
+    pm = measure_part(tpl, c, tpl.shape[0] / 2, expected_px=(2.0 * k / mpp, 1.25 * k / mpp))
+    mask = np.zeros(tpl.shape[:2], np.uint8)
+    box = cv2.boxPoints((pm.center_px, (pm.long_px * 0.95, pm.short_px * 0.95), pm.angle_px_deg))
+    cv2.fillPoly(mask, [np.round(box).astype(np.int32)], 255)
+    hits = find_by_template(img, tpl, threshold=0.3, scale=0.25, mask=mask)
+    (x, y), s = hits[0]
+    assert np.hypot(x - 480, y - 340) < 15 and s > 0.85, hits[:3]      # the part (880, 640) - crop origin
+    assert all(sc < 0.8 for _, sc in hits[1:]), hits[:4]                # nothing else passes
