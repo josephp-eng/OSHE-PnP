@@ -37,7 +37,8 @@ class PartFinder:
     part's height doesn't skew the scale there). A candidate that fails is not looked at again."""
     SHORTLIST = 0.55        # wide-view score to be worth a close look
     MAX_CHECKS = 8          # close looks per search (each is a short move + photo)
-    SURE = 0.85             # a close-up this good is a part: stop checking the others
+    SURE = 0.80             # nearest close-up this good is taken (keeps the row order;
+                            # real parts 0.83-0.95 close up, pads <= 0.73 on 2026-11-11)
 
     def __init__(self, mr, grab, motion, principal, size_mm, k_height, origin, avoid=(),
                  threshold=0.70, say=print, save=None):
@@ -79,6 +80,23 @@ class PartFinder:
         cv2.fillPoly(self.mask, [np.round(box).astype(np.int32)], 255)
         self.last = self.origin
         self.first = True
+
+    def locate_near_centre(self, img, radius_mm=2.5, min_score=0.6):
+        """Backup for the landing check: the part (looks like the first one) near the image
+        centre, then its symmetry centre. Pixel position or None. ~0.1 mm less precise than the
+        before/after check (where both worked on real photos they agreed within 0.03-0.08 mm)."""
+        r_px = radius_mm / self.motion.mm_per_px
+        h = find_by_template(img, self.template, center_px=self.principal, radius_px=r_px,
+                             threshold=min_score, mask=self.mask, scale=0.5)
+        if not h:
+            return None
+        px = np.asarray(h[0][0], float)
+        s = int(0.2 / self.motion.mm_per_px)
+        c, v = symmetry_center(img, px, self.half_sym, int(0.5 / self.motion.mm_per_px),
+                               starts=((0, 0), (s, 0), (-s, 0), (0, s), (0, -s)))
+        if c is not None and v >= 0.3 and np.linalg.norm(c - px) * self.motion.mm_per_px < 0.4:
+            return c
+        return px
 
     def _sym(self, img, start):
         mpp = self.motion.mm_per_px
@@ -159,6 +177,7 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
                size_mm=(2.0, 1.25), thickness_mm=0.85, working_distance_mm=11.5,
                pick_z=37.8, place_z=37.7, inspect_z=34.5, approach_mm=0.8, vac_ms=300,
                release_ms=500, correct=False, say=print, save=None):
+    backup = getattr(next_pick, "locate_near_centre", None)      # PartFinder provides it
     """Fill `targets` one by one. next_pick(last_pick_xy or None) -> XY of the next part (down
     camera centred on it) or None to stop. Returns a list of per-attempt dicts."""
     off = np.array(ms["down_cam_offset_mm"], float)
@@ -249,14 +268,22 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
         save(f"target{t_idx}_after", after)
         found = find_placed_part(ref_t, after, down_principal, 2.5 / mpp,
                                  tuple(v * k_height for v in exp_px))
-        if found is None:
+        status = "ok"
+        px = None if found is None else np.asarray(found.center_px)
+        if px is None and backup is not None:
+            px = backup(after)
+            status = "ok (backup)"
+        if px is None:
             rec["status"] = "placed part not found at the target (still on the nozzle?)"
             say("  NOT found at the target after placing - check the nozzle and the tape.")
             continue
-        landed = target + down_motion.offset_mm(np.asarray(found.center_px) - down_principal) / k_height
+        landed = target + down_motion.offset_mm(px - down_principal) / k_height
         e = landed - target
         job = e if correct else e - u
-        rec.update(status="ok", landed=landed.tolist(), error_mm=e.tolist(), job_error_mm=job.tolist())
+        rec.update(status=status, landed=landed.tolist(), error_mm=e.tolist(), job_error_mm=job.tolist())
+        if status != "ok":
+            say("  (before/after check unsure; measured by finding the part itself, ~0.1 mm less "
+                "precise, left out of the offset average)")
         say(f"  landed {np.round(landed, 3).tolist()}: error {np.round(e, 3).tolist()} mm "
             f"(|e| {np.linalg.norm(e):.3f}); job error {np.round(job, 3).tolist()} mm")
     return results
@@ -264,8 +291,11 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
 
 def summarize(results, off, correct):
     ok = [r for r in results if r.get("status") == "ok"]
-    out = {"attempts": len(results), "ok": len(ok), "correct": correct,
-           "failed": [r["status"] for r in results if r.get("status") != "ok"]}
+    backup = [r for r in results if r.get("status") == "ok (backup)"]
+    out = {"attempts": len(results), "ok": len(ok), "ok_backup": len(backup), "correct": correct,
+           "failed": [r["status"] for r in results if not str(r.get("status", "")).startswith("ok")]}
+    if backup:
+        out["backup_job_errors_mm"] = [np.round(r["job_error_mm"], 3).tolist() for r in backup]
     if ok:
         job = np.array([r["job_error_mm"] for r in ok])
         e = np.array([r["error_mm"] for r in ok])
