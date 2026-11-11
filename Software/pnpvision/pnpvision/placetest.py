@@ -259,13 +259,17 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
             continue
         fails_in_row = 0
         grabs.append(grab_fix + u)       # grab error of an uncorrected pick at this part
-        if rotate_to is not None:
+        want = None
+        if rotate_to is not None:     # one angle, or a list used in turn (target i -> list[i % n])
+            want = float(rotate_to[t_idx % len(rotate_to)]) if np.ndim(rotate_to) else float(rotate_to)
+            rec["target_angle_deg"] = want
+        if want is not None:
             # turn to the target angle (shortest way, mod 180), then look again: the offset
             # turns with the part. Up to 2 turns if the first one lands more than angle_tol off.
             mr.move_abs(z=inspect_z, feedrate=300)
             turns, lost = [], False
             for _ in range(2):
-                d = rotator.turn_to(rotate_to, ins["angle_deg"])
+                d = rotator.turn_to(want, ins["angle_deg"])
                 predicted = rotate_xy(u, d)
                 ins = up_inspect(size_mm)
                 if "offset_mm" not in ins:
@@ -277,7 +281,7 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
                 say(f"  turned {d:+.1f} deg (motor {rotator.motor:.1f}): now angle {ins['angle_deg']:.1f}, "
                     f"offset {np.round(u_new, 3).tolist()} (predicted {np.round(predicted, 3).tolist()})")
                 u = u_new
-                if abs(shortest_turn(rotate_to, ins["angle_deg"], rotator.symmetry)) <= angle_tol_deg:
+                if abs(shortest_turn(want, ins["angle_deg"], rotator.symmetry)) <= angle_tol_deg:
                     break
             mr.move_abs(z=mr.safe_travel_z, feedrate=600)
             rec["turns"] = turns
@@ -315,8 +319,8 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
         rec.update(status=status, landed=landed.tolist(), error_mm=e.tolist(), job_error_mm=job.tolist())
         if found is not None:
             rec["landed_angle_deg"] = float(down_motion.direction_mm(found.angle_px_deg))
-            if rotate_to is not None:
-                rec["angle_error_deg"] = -shortest_turn(rotate_to, rec["landed_angle_deg"], 180.0)
+            if want is not None:
+                rec["angle_error_deg"] = -shortest_turn(want, rec["landed_angle_deg"], 180.0)
                 say(f"  landed at {rec['landed_angle_deg']:.1f} deg: angle error {rec['angle_error_deg']:+.2f} deg")
         if status != "ok":
             say("  (before/after check unsure; measured by finding the part itself, ~0.1 mm less "
@@ -343,7 +347,8 @@ def summarize(results, off, correct):
                    suggested_down_cam_offset_mm=(np.asarray(off) - job.mean(0)).round(4).tolist())
     ang = [r["angle_error_deg"] for r in results if "angle_error_deg" in r]
     if ang:
-        out.update(angle_errors_deg=np.round(ang, 2).tolist(),
+        out.update(angle_targets_deg=[r["target_angle_deg"] for r in results if "angle_error_deg" in r],
+                   angle_errors_deg=np.round(ang, 2).tolist(),
                    mean_angle_error_deg=round(float(np.mean(ang)), 2),
                    max_abs_angle_error_deg=round(float(np.max(np.abs(ang))), 2))
     return out

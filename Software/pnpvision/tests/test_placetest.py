@@ -168,6 +168,13 @@ def test_place_test_rotates_parts_to_target():
                 assert np.linalg.norm(got - t["predicted_offset_mm"]) < 0.03, t
 
 
+def test_place_test_angle_sweep():
+    w, res, s = _run(correct=True, rotate_to=[0.0, 60.0, 120.0])
+    assert s["ok"] == 3, res
+    assert s["angle_targets_deg"] == [0.0, 60.0, 120.0], s
+    assert s["max_abs_angle_error_deg"] < 1.5, s
+
+
 if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):

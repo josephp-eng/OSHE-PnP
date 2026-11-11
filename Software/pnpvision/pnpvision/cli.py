@@ -532,7 +532,7 @@ def cmd_place_test(cfg, a):
             size_mm=tuple(a.size), thickness_mm=a.thickness, working_distance_mm=wd,
             pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
             vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save,
-            rotator=rotator, rotate_to=a.rotate_to, angle_tol_deg=a.angle_tol)
+            rotator=rotator, rotate_to=(a.rotate_to[0] if a.rotate_to and len(a.rotate_to) == 1 else a.rotate_to), angle_tol_deg=a.angle_tol)
         summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
         print("\n" + json.dumps(summary, indent=2))
         path = C.rel(cfg, f"results/place_test_{stamp}.json")
@@ -691,8 +691,9 @@ def main():
     p.add_argument("--correct", action="store_true", help="apply the up-camera offset when placing")
     p.add_argument("--apply-offset", action="store_true",
                    help="save the suggested down_cam_offset_mm (needs >= 3 good cycles)")
-    p.add_argument("--rotate-to", type=float,
-                   help="turn each part to this machine-frame angle (deg, long axis from +X) before placing")
+    p.add_argument("--rotate-to", type=float, nargs="+",
+                   help="turn each part to this machine-frame angle (deg, long axis from +X) before placing; "
+                        "several angles = used in turn (target 1 gets the first, ...)")
     p.add_argument("--angle-tol", type=float, default=1.0,
                    help="(with --rotate-to) turn again if the re-inspected angle is off by more, deg")
     p = sub.add_parser("align-board", help="centre the down camera on alignment pad A first; finds the "
