@@ -328,3 +328,22 @@ def test_template_finds_part_not_pads_on_real_board():
     (x, y), s = hits[0]
     assert np.hypot(x - 480, y - 340) < 15 and s > 0.85, hits[:3]      # the part (880, 640) - crop origin
     assert all(sc < 0.8 for _, sc in hits[1:]), hits[:4]                # nothing else passes
+
+
+def test_close_up_check_accepts_parts_rejects_pads():
+    # The close-up check of place-test: template + outline mask of the first part of one run,
+    # compared, with the camera over it, against a DIFFERENT part (2026-11-11 photos), and
+    # against pads/silkscreen. Different parts score ~0.77, board features <= 0.51.
+    from pnpvision.detect import find_by_template
+    from pnpvision.placetest import PartFinder
+    d = os.path.join(os.path.dirname(__file__), "data")
+    tpl = cv2.imread(os.path.join(d, "first_part2_template.png"))
+    mask = cv2.imread(os.path.join(d, "first_part2_mask.png"), 0)
+    img = cv2.imread(os.path.join(d, "pick_area.jpg"))         # crop origin (400, 300) of the photo
+    r = 1.5 * 58.7
+    thr = PartFinder.__init__.__defaults__[1]                     # the threshold place-test uses
+    part = find_by_template(img, tpl, center_px=(477.6, 335.9), radius_px=r, threshold=0, mask=mask, scale=0.5)
+    assert part and part[0][1] >= thr + 0.05, part
+    for spot in ((700, 150), (580, 140), (840, 320), (420, 520), (700, 340)):
+        h = find_by_template(img, tpl, center_px=spot, radius_px=r, threshold=0, mask=mask, scale=0.5)
+        assert not h or h[0][1] < thr - 0.05, (spot, h[:1])

@@ -32,11 +32,14 @@ def _mean_frame(grab, n=2):
 class PartFinder:
     """First part: wherever the down camera is centred when the test starts (you aim it).
     Next parts: found automatically from a picture of that first part (template) by searching
-    the camera view from the first pick position, nearest first; then the camera moves over
-    the match and re-matches near the centre, where the part's height doesn't skew the scale."""
+    the camera view from the first pick position for a shortlist, then checking candidates
+    nearest first with the camera right over each one (same lighting as the template, and the
+    part's height doesn't skew the scale there). A candidate that fails is not looked at again."""
+    SHORTLIST = 0.55        # wide-view score to be worth a close look
+    MAX_CHECKS = 8          # close looks per search (each is a short move + photo)
 
     def __init__(self, mr, grab, motion, principal, size_mm, k_height, origin, avoid=(),
-                 threshold=0.8, say=print, save=None):
+                 threshold=0.65, say=print, save=None):
         self.save = save or (lambda name, img: None)
         self.searches = 0
         self.mr, self.grab, self.motion = mr, grab, motion
@@ -45,6 +48,7 @@ class PartFinder:
         self.origin = np.asarray(origin, float)
         self.avoid = [np.asarray(p, float) for p in avoid]     # e.g. the targets (parts on tape)
         self.used = []                                          # picked or failed: skip
+        self.rejected = []                                      # looked at close up: not a part
         self.threshold, self.say = threshold, say
         mpp = motion.mm_per_px
         half = int(round(0.5 * float(np.hypot(*size_mm)) * k_height / mpp * 1.1))
@@ -87,39 +91,41 @@ class PartFinder:
             self.first = False
             return self.origin
         img = self._look(self.origin)
-        # all matches down to 0.5, so the saved picture shows near-misses too
-        hits = find_by_template(img, self.template, threshold=0.5, scale=0.25, mask=self.mask)
+        # Wide view = shortlist only. Away from the middle the down light's glare changes how a
+        # part looks (2026-11-11: real parts 0.64-0.78 there, tape/silkscreen up to 0.73), so
+        # every candidate is judged again with the camera right over it, lit like the template.
+        hits = find_by_template(img, self.template, threshold=self.SHORTLIST, scale=0.25, mask=self.mask)
         self.searches += 1
+        self.save(f"search{self.searches}_raw", img)
         vis = img.copy()
         for px, score in hits:
-            col = (0, 255, 0) if score >= self.threshold else (0, 0, 255)
-            cv2.circle(vis, (int(px[0]), int(px[1])), 40, col, 3)
-            cv2.putText(vis, f"{score:.2f}", (int(px[0]) + 45, int(px[1])), cv2.FONT_HERSHEY_SIMPLEX, 1.2, col, 3)
+            cv2.circle(vis, (int(px[0]), int(px[1])), 40, (0, 200, 255), 3)
+            cv2.putText(vis, f"{score:.2f}", (int(px[0]) + 45, int(px[1])), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 200, 255), 3)
         self.save(f"search{self.searches}", vis)
         cands = []
         for px, score in hits:
-            if score < self.threshold:
-                continue
             p = self._to_machine(self.origin, px)
-            if any(np.linalg.norm(p - q) < 1.0 for q in self.used) or \
+            if any(np.linalg.norm(p - q) < 1.0 for q in self.used + self.rejected) or \
                any(np.linalg.norm(p - q) < 2.5 for q in self.avoid):
                 continue
             cands.append((np.linalg.norm(p - self.origin), p, score))
-        if not cands:
-            near = ", ".join(f"{s:.2f}" for _, s in hits[:4])
-            self.say(f"  no more parts found near the first pick position (best scores: {near or 'none'}; "
-                     f"need {self.threshold}).")
-            return None
-        _, p, score = min(cands, key=lambda c: c[0])
-        # refine with the camera right over it
-        img = self._look(p)
+        cands.sort(key=lambda c: c[0])                     # nearest first
         r_px = 1.5 / self.motion.mm_per_px
-        fine = find_by_template(img, self.template, center_px=self.principal, radius_px=r_px,
-                                threshold=self.threshold, mask=self.mask)
-        if fine:
-            p = self._to_machine(p, fine[0][0])
-        self.say(f"  next part found at {np.round(p, 3).tolist()} (match {score:.2f}, {len(cands)} left)")
-        return p
+        tried = []
+        for _, p, score in cands[:self.MAX_CHECKS]:
+            img = self._look(p)
+            fine = find_by_template(img, self.template, center_px=self.principal, radius_px=r_px,
+                                    threshold=0.0, mask=self.mask, scale=0.5)
+            s = fine[0][1] if fine else 0.0
+            tried.append(f"{s:.2f}")
+            if fine and s >= self.threshold:
+                p = self._to_machine(p, fine[0][0])
+                self.say(f"  next part at {np.round(p, 3).tolist()} (wide view {score:.2f}, close up {s:.2f})")
+                return p
+            self.rejected.append(p)
+        self.say(f"  no more parts found near the first pick position ({len(cands)} candidate(s); "
+                 f"close-up scores {', '.join(tried) or 'none'}; need {self.threshold}).")
+        return None
 
 
 def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_pick, targets,
