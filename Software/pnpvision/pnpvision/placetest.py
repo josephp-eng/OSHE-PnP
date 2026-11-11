@@ -40,7 +40,7 @@ class PartFinder:
     SURE = 0.85             # a close-up this good is a part: stop checking the others
 
     def __init__(self, mr, grab, motion, principal, size_mm, k_height, origin, avoid=(),
-                 threshold=0.65, say=print, save=None):
+                 threshold=0.70, say=print, save=None):
         self.save = save or (lambda name, img: None)
         self.searches = 0
         self.mr, self.grab, self.motion = mr, grab, motion
@@ -55,18 +55,19 @@ class PartFinder:
         half = int(round(0.5 * float(np.hypot(*size_mm)) * k_height / mpp * 1.1))
         img = self._look(self.origin)
         self.half_sym = half
-        self.max_shift = int(0.6 / mpp)
+        self.max_shift = int(1.0 / mpp)
         # You aimed by eye: find the first part's real centre as its centre of 180-degree
         # symmetry (2026-11-11: thresholding outlined only half of the part, so the first pick
         # and every template match afterwards were ~0.4 mm off).
         c, v = self._sym(img, self.principal)
-        if c is not None and np.linalg.norm(c - self.principal) * mpp < 0.6:
+        if c is not None and v >= 0.3 and np.linalg.norm(c - self.principal) * mpp < 1.0:
             self.origin = self._to_machine(self.origin, c)
             say(f"  first part centre measured at {np.round(self.origin, 3).tolist()} "
                 f"({np.linalg.norm(np.asarray(origin) - self.origin):.2f} mm from where you aimed)")
         else:
             c = self.principal.copy()
-            say("  could not measure the first part's centre; using where you aimed")
+            say(f"  could not measure the first part's centre (symmetry score {v:.2f}); "
+                "using where you aimed - picks will correct themselves from the up camera")
         cx, cy = int(round(c[0])), int(round(c[1]))
         self.template = img[cy - half:cy + half + 1, cx - half:cx + half + 1].copy()
         # Match on the part only: a part-sized rectangle (slightly shrunk) at the angle where it
@@ -144,9 +145,10 @@ class PartFinder:
             return None
         s, p, img, px, score = best
         q = self._to_machine(p, px)
-        # final centre from symmetry (independent of the template), if it agrees
-        c, _ = self._sym(img, px)
-        if c is not None and np.linalg.norm(c - np.asarray(px)) * self.motion.mm_per_px < 0.3:
+        # final centre from symmetry (independent of the template, so a template that is a bit
+        # off-centre can't push every pick off: 2026-11-11 picks grabbed part edges and dropped)
+        c, v = self._sym(img, px)
+        if c is not None and v >= 0.3 and np.linalg.norm(c - np.asarray(px)) * self.motion.mm_per_px < 0.8:
             q = self._to_machine(p, c)
         self.say(f"  next part at {np.round(q, 3).tolist()} (wide view {score:.2f}, close up {s:.2f}; "
                  f"checked {len(tried)})")
@@ -183,7 +185,18 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
     results = []
     t_idx = 0
     part = None
+    # Where on the part the nozzle grabbed, from the up camera (good picks only): later picks
+    # are shifted by the average, so they converge on centred grabs (an off-centre grab tilts
+    # the part and it drops). The accuracy numbers don't depend on it: (e - u) cancels it.
+    grabs = []
+    fails_in_row = 0
     while t_idx < len(targets):
+        if fails_in_row >= 3:
+            say("\nStopping: 3 failed picks in a row (out of parts, or picking something that isn't one).")
+            break
+        if len(results) >= 2 * len(targets) + 2:
+            say("\nStopping: too many attempts for the number of targets.")
+            break
         part = next_pick(part)
         if part is None:
             break
@@ -193,8 +206,10 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
         results.append(rec)
         say(f"\n--- part {len(results)}: from {np.round(part, 3).tolist()} -> target {t_idx + 1}/"
             f"{len(targets)} {np.round(target, 3).tolist()} ---")
-        # pick
-        n = part + off
+        # pick (shifted by the average grab offset so far)
+        grab_fix = np.mean(grabs[-3:], axis=0) if grabs else np.zeros(2)
+        rec["grab_fix_mm"] = grab_fix.tolist()
+        n = part + off + grab_fix
         mr.move_abs(x=float(n[0]), y=float(n[1]))
         lower_and("VALVE_ON", pick_z, vac_ms)
         # inspect
@@ -207,6 +222,7 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
             rec["status"] = "pick failed (nozzle empty)"
             say(f"  nozzle empty after the pick ({ins.get('reason')}).")
             mr.gcode("VALVE_OFF")
+            fails_in_row += 1
             continue
         u = np.array(ins["offset_mm"], float)
         say(f"  on nozzle: offset {np.round(u, 3).tolist()} mm, angle {ins['angle_deg']:.1f} deg, "
@@ -215,13 +231,16 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
             # held, but not the part we expect (on its side, two parts, ...): put it back
             rec["status"] = f"bad part ({ins['reason']}), put back"
             say(f"  {ins['reason']} -> putting it back where it came from")
-            n = part + off
+            n = part + off + grab_fix
             mr.move_abs(x=float(n[0]), y=float(n[1]))
             lower_and("VALVE_OFF", pick_z - 0.1, release_ms)
+            fails_in_row += 1
             continue
+        fails_in_row = 0
+        grabs.append(grab_fix + u)       # grab error of an uncorrected pick at this part
         # photo of the empty target, place, photo again
         ref_t = look(target)
-        n = target + off - (u if correct else 0.0)
+        n = target + off - (u if correct else 0.0)       # u: part relative to the nozzle
         mr.move_abs(x=float(n[0]), y=float(n[1]))
         lower_and("VALVE_OFF", place_z, release_ms, slow_lift=True)
         t_idx += 1
