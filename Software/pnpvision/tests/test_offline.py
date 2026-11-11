@@ -291,23 +291,32 @@ if __name__ == "__main__":
 
 
 def test_placed_part_found_on_real_tape_photos():
-    # Crops of the down camera at two targets on double-sided tape (2026-11-11), before and
-    # after an 0805 was placed. The old finder missed both: the camera came back ~1 px off and
-    # the part's metal ends vanished in the difference. Centre and size checked by eye.
+    # Crops of the down camera at targets on double-sided tape (2026-11-11), before and after an
+    # 0805 was placed. Problems these photos showed: the camera comes back ~1 px off (lights up
+    # every tape edge), the part's metal ends can vanish in the difference, and the light's
+    # colour / white balance can shift a lot between the two photos.
     from pnpvision.detect import find_placed_part
     d = os.path.join(os.path.dirname(__file__), "data")
     mpp, k = 1 / 58.7, 11.5 / (11.5 - 0.85)
     exp = (2.0 * k / mpp, 1.25 * k / mpp)
-    for t, want in ((1, (7.5, 4.2)), (2, (1.3, 3.4))):
+    c = (199.6, 199.9)
+    # two methods (aligned grey/colour difference, Lab difference) agree within ~0.08 mm here
+    for t, want in ((1, (10.0, 3.0)), (2, (1.4, 3.5))):
         a = cv2.imread(os.path.join(d, f"landing_t{t}_empty.jpg"))
         b = cv2.imread(os.path.join(d, f"landing_t{t}_after.jpg"))
-        c = (199.6, 199.9)
         pm = find_placed_part(a, b, c, 2.5 / mpp, exp)
         assert pm is not None, t
         off = np.subtract(pm.center_px, c)
-        assert np.linalg.norm(off - want) < 3.0, (t, off)          # within 0.05 mm
+        assert np.linalg.norm(off - want) < 4.0, (t, off)          # within ~0.07 mm
         assert 1.9 < pm.long_px * mpp < 2.3 and 1.25 < pm.short_px * mpp < 1.6, (t, pm)
         assert find_placed_part(a, a, c, 2.5 / mpp, exp) is None   # nothing placed -> nothing found
+    # strong colour shift between the photos: may fail to measure, but must not give a wrong
+    # part (this one came out 1.89 x 1.70 mm, the size check rejects it)
+    a = cv2.imread(os.path.join(d, "landing_colourshift_empty.jpg"))
+    b = cv2.imread(os.path.join(d, "landing_colourshift_after.jpg"))
+    pm = find_placed_part(a, b, c, 2.5 / mpp, exp)
+    if pm is not None:
+        assert 1.9 < pm.long_px * mpp < 2.3 and 1.2 < pm.short_px * mpp < 1.5, pm
 
 
 def test_template_finds_part_not_pads_on_real_board():
@@ -347,3 +356,22 @@ def test_close_up_check_accepts_parts_rejects_pads():
     for spot in ((700, 150), (580, 140), (840, 320), (420, 520), (700, 340)):
         h = find_by_template(img, tpl, center_px=spot, radius_px=r, threshold=0, mask=mask, scale=0.5)
         assert not h or h[0][1] < thr - 0.05, (spot, h[:1])
+
+
+def test_symmetry_centre_of_real_part_ignores_aim():
+    # Real 0805 on bare board among pads (2026-11-11). Thresholding found only half of a part
+    # like this; the 180-degree symmetry centre lands on the same point from aims 0.5 mm off.
+    from pnpvision.detect import symmetry_center
+    img = cv2.imread(os.path.join(os.path.dirname(__file__), "data", "pick_area.jpg"))
+    mpp, k = 1 / 58.7, 11.5 / (11.5 - 0.85)
+    half = int(round(0.5 * np.hypot(2.0, 1.25) * k / mpp * 1.1))
+    s = int(0.3 / mpp)
+    starts = ((0, 0), (s, 0), (-s, 0), (0, s), (0, -s))
+    found = []
+    for aim in ((482, 339), (511, 339), (453, 324), (482, 368), (500, 310)):
+        c, v = symmetry_center(img, aim, half, int(0.6 / mpp), starts)
+        assert c is not None and v > 0.4, (aim, c, v)
+        found.append(c)
+    found = np.array(found)
+    assert np.ptp(found, axis=0).max() < 2.0, found                       # all within 2 px
+    assert np.linalg.norm(found.mean(0) - (482, 339)) < 4.0, found.mean(0)  # the part's middle

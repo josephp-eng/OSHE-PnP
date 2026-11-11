@@ -118,10 +118,12 @@ def _run(correct):
 def test_place_test_uncorrected_measures_offset_error():
     w, res, s = _run(correct=False)
     assert s["ok"] == 3, res
-    assert res[1]["status"].startswith("pick failed"), res    # the stuck part, nearest the first
-    # found parts are aimed at their true centres (hand-dropped, rotated, among pads)
-    for r, true in zip([res[2], res[3]], [FIRST + (4.2, 1.0), FIRST + (-6.0, -2.0)]):
-        assert np.linalg.norm(np.array(r["picked_from"]) - true) < 0.05, (r["picked_from"], true)
+    assert any(r["status"].startswith("pick failed") for r in res), res     # the stuck part
+    # every pick is aimed at a real part's true centre (hand-dropped, rotated, among pads)
+    real = [FIRST + d for d in ((0, 0), (-2.6, 0.3), (4.2, 1.0), (-6.0, -2.0), (9.0, 3.5))]
+    for r in res:
+        err = min(np.linalg.norm(np.array(r["picked_from"]) - t) for t in real)
+        assert err < 0.05, (r["picked_from"], err)
     assert np.allclose(s["suggested_down_cam_offset_mm"], OFF_TRUE, atol=0.04), s
 
 

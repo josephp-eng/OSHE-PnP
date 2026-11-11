@@ -68,6 +68,51 @@ class PartMeasure:
     area_px: float
 
 
+def symmetry_center(img, start_px, half_px, max_shift_px, starts=((0, 0),)):
+    """Centre of 180-degree symmetry of what is around start_px (chip parts look the same
+    turned half a turn), independent of colours and lighting. Correlates a window with its own
+    180-degree rotation; the best shift s means the centre is window centre + s/2. Tries each
+    start offset and keeps the best. Returns (center_px (x, y), score) or (None, 0).
+    On a real 0805 on bare board (2026-11-11) every start up to 0.5 mm off landed within
+    0.5 px; thresholding (measure_part) had found only half of that part there."""
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    g = g.astype(np.float32)
+    m = 2 * int(max_shift_px)
+    best = (None, 0.0)
+    for dx, dy in starts:
+        x0 = int(round(start_px[0] + dx)) - half_px
+        y0 = int(round(start_px[1] + dy)) - half_px
+        if x0 - m < 0 or y0 - m < 0 or x0 + 2 * half_px + 1 + m > g.shape[1] or y0 + 2 * half_px + 1 + m > g.shape[0]:
+            continue
+        win = g[y0:y0 + 2 * half_px + 1, x0:x0 + 2 * half_px + 1]
+        rot = np.ascontiguousarray(win[::-1, ::-1])
+        big = g[y0 - m:y0 + 2 * half_px + 1 + m, x0 - m:x0 + 2 * half_px + 1 + m]
+        res = cv2.matchTemplate(big, rot, cv2.TM_CCOEFF_NORMED)
+        _, v, _, (x, y) = cv2.minMaxLoc(res)
+        if v > best[1]:
+            best = (np.array([x0 + half_px + (x - m) / 2.0, y0 + half_px + (y - m) / 2.0]), float(v))
+    return best
+
+
+def outline_angle(img, center_px, long_px, short_px, step_deg=2):
+    """Angle (deg, OpenCV box convention) at which a long x short rectangle centred on the part
+    lines up best with the image's edges. Used to shape the part mask for matching."""
+    g = cv2.GaussianBlur(cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img, (5, 5), 0)
+    g = g.astype(np.float32)
+    mag = cv2.magnitude(cv2.Sobel(g, cv2.CV_32F, 1, 0), cv2.Sobel(g, cv2.CV_32F, 0, 1))
+    t = np.linspace(0, 1, 40, endpoint=False)[:, None]
+    best = (0.0, -1.0)
+    for th in np.arange(0, 180, step_deg):
+        box = cv2.boxPoints((tuple(map(float, center_px)), (long_px, short_px), float(th)))
+        pts = np.vstack([box[i] + (box[(i + 1) % 4] - box[i]) * t for i in range(4)])
+        xi = np.clip(pts[:, 0].astype(int), 0, g.shape[1] - 1)
+        yi = np.clip(pts[:, 1].astype(int), 0, g.shape[0] - 1)
+        s = float(mag[yi, xi].mean())
+        if s > best[1]:
+            best = (float(th), s)
+    return best[0]
+
+
 def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.8,
                      angles=tuple(range(0, 360, 12)), quarter_turns=(0,), scale=1.0, max_hits=20,
                      mask=None, _cropped=False):
@@ -144,7 +189,7 @@ def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.
     return hits
 
 
-def find_placed_part(ref, img, center_px, radius_px, expected_px, size_tol=0.4, min_threshold=30):
+def find_placed_part(ref, img, center_px, radius_px, expected_px, size_tol=0.2, min_threshold=35):
     """The part that appeared near center_px between `ref` (target before placing) and `img`
     (after), both taken from the same commanded camera position. Returns PartMeasure or None.
 
@@ -165,12 +210,19 @@ def find_placed_part(ref, img, center_px, radius_px, expected_px, size_tol=0.4, 
     r = int(radius_px)
     x0, y0 = max(int(center_px[0]) - r, 0), max(int(center_px[1]) - r, 0)
     x1, y1 = min(int(center_px[0]) + r, img.shape[1]), min(int(center_px[1]) + r, img.shape[0])
-    a = cv2.GaussianBlur(ref[y0:y1, x0:x1], (7, 7), 0).astype(np.int16)
-    b = cv2.GaussianBlur(img[y0:y1, x0:x1], (7, 7), 0).astype(np.int16)
-    d = np.abs(b - a)
-    d = (d.max(axis=2) if d.ndim == 3 else d).astype(np.uint8)
-    t, _ = cv2.threshold(d, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
-    mask = (d > max(t, min_threshold)).astype(np.uint8) * 255
+    a = cv2.GaussianBlur(ref[y0:y1, x0:x1], (7, 7), 0).astype(np.float32)
+    b = cv2.GaussianBlur(img[y0:y1, x0:x1], (7, 7), 0).astype(np.float32)
+    if a.ndim == 3:
+        # The down light's colour / the camera's white balance shifted between photos
+        # (2026-11-11: blue -25 %, red +80 %): even out each colour channel (medians = board,
+        # the part is a small share of the window), then compare in Lab colour space.
+        a = np.clip(a * (np.median(b.reshape(-1, 3), 0) / np.maximum(np.median(a.reshape(-1, 3), 0), 1.0)), 0, 255)
+        la = cv2.cvtColor(a.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+        lb = cv2.cvtColor(b.astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+        d = np.sqrt(((lb - la) ** 2).sum(axis=2))
+    else:
+        d = np.abs(b - a * (np.median(b) / max(float(np.median(a)), 1.0)))
+    mask = (d > max(min_threshold, 3.0 * float(np.median(d)))).astype(np.uint8) * 255
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
     n, lab, st, cen = cv2.connectedComponentsWithStats(mask)
     if n < 2:

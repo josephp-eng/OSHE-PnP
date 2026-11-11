@@ -22,7 +22,7 @@ Hardware is injected (callables), so the whole cycle runs against a simulator in
 import cv2
 import numpy as np
 
-from .detect import find_by_template, find_placed_part, measure_part
+from .detect import find_by_template, find_placed_part, outline_angle, symmetry_center
 
 
 def _mean_frame(grab, n=2):
@@ -37,6 +37,7 @@ class PartFinder:
     part's height doesn't skew the scale there). A candidate that fails is not looked at again."""
     SHORTLIST = 0.55        # wide-view score to be worth a close look
     MAX_CHECKS = 8          # close looks per search (each is a short move + photo)
+    SURE = 0.85             # a close-up this good is a part: stop checking the others
 
     def __init__(self, mr, grab, motion, principal, size_mm, k_height, origin, avoid=(),
                  threshold=0.65, say=print, save=None):
@@ -53,29 +54,36 @@ class PartFinder:
         mpp = motion.mm_per_px
         half = int(round(0.5 * float(np.hypot(*size_mm)) * k_height / mpp * 1.1))
         img = self._look(self.origin)
-        # You aimed by eye: measure the first part's real centre close to the reticle (only that
-        # part is that close), so neither the first pick nor the template inherits the aim error.
-        exp_px = tuple(v * k_height / mpp for v in sorted(size_mm, reverse=True))
-        pm = measure_part(img, self.principal, half * 1.3, expected_px=exp_px)
-        c = self.principal
-        if pm is not None and np.linalg.norm(np.subtract(pm.center_px, self.principal)) * mpp < 0.6:
-            c = np.asarray(pm.center_px, float)
+        self.half_sym = half
+        self.max_shift = int(0.6 / mpp)
+        # You aimed by eye: find the first part's real centre as its centre of 180-degree
+        # symmetry (2026-11-11: thresholding outlined only half of the part, so the first pick
+        # and every template match afterwards were ~0.4 mm off).
+        c, v = self._sym(img, self.principal)
+        if c is not None and np.linalg.norm(c - self.principal) * mpp < 0.6:
             self.origin = self._to_machine(self.origin, c)
             say(f"  first part centre measured at {np.round(self.origin, 3).tolist()} "
                 f"({np.linalg.norm(np.asarray(origin) - self.origin):.2f} mm from where you aimed)")
         else:
+            c = self.principal.copy()
             say("  could not measure the first part's centre; using where you aimed")
         cx, cy = int(round(c[0])), int(round(c[1]))
         self.template = img[cy - half:cy + half + 1, cx - half:cx + half + 1].copy()
-        # Match on the part only: its outline (slightly shrunk) as a mask, so the board around
-        # the first part (pads, silkscreen) doesn't have to match around the others.
-        self.mask = None
-        if pm is not None and c is not self.principal:
-            self.mask = np.zeros(self.template.shape[:2], np.uint8)
-            box = cv2.boxPoints(((half + (c[0] - cx), half + (c[1] - cy)),
-                                 (pm.long_px * 0.95, pm.short_px * 0.95), pm.angle_px_deg))
-            cv2.fillPoly(self.mask, [np.round(box).astype(np.int32)], 255)
+        # Match on the part only: a part-sized rectangle (slightly shrunk) at the angle where it
+        # fits the part's edges, so the board around the first part doesn't have to match.
+        lp, sp = (v * k_height / mpp for v in sorted(size_mm, reverse=True))
+        ang = outline_angle(img, c, lp, sp)
+        self.mask = np.zeros(self.template.shape[:2], np.uint8)
+        box = cv2.boxPoints(((half + (c[0] - cx), half + (c[1] - cy)), (lp * 0.95, sp * 0.95), ang))
+        cv2.fillPoly(self.mask, [np.round(box).astype(np.int32)], 255)
+        self.last = self.origin
         self.first = True
+
+    def _sym(self, img, start):
+        mpp = self.motion.mm_per_px
+        s = int(0.3 / mpp)
+        return symmetry_center(img, start, self.half_sym, self.max_shift,
+                               starts=((0, 0), (s, 0), (-s, 0), (0, s), (0, -s)))
 
     def _look(self, xy):
         self.mr.move_abs(x=float(xy[0]), y=float(xy[1]))
@@ -87,10 +95,13 @@ class PartFinder:
     def __call__(self, last):
         if last is not None:
             self.used.append(np.asarray(last, float))
+            self.last = np.asarray(last, float)
         if self.first:
             self.first = False
             return self.origin
-        img = self._look(self.origin)
+        # search outward from the part picked last: follows a row in whatever direction it runs
+        view = self.last
+        img = self._look(view)
         # Wide view = shortlist only. Away from the middle the down light's glare changes how a
         # part looks (2026-11-11: real parts 0.64-0.78 there, tape/silkscreen up to 0.73), so
         # every candidate is judged again with the camera right over it, lit like the template.
@@ -104,28 +115,42 @@ class PartFinder:
         self.save(f"search{self.searches}", vis)
         cands = []
         for px, score in hits:
-            p = self._to_machine(self.origin, px)
+            p = self._to_machine(view, px)
             if any(np.linalg.norm(p - q) < 1.0 for q in self.used + self.rejected) or \
                any(np.linalg.norm(p - q) < 2.5 for q in self.avoid):
                 continue
-            cands.append((np.linalg.norm(p - self.origin), p, score))
+            cands.append((np.linalg.norm(p - view), p, score))
         cands.sort(key=lambda c: c[0])                     # nearest first
         r_px = 1.5 / self.motion.mm_per_px
-        tried = []
+        tried, best = [], None
         for _, p, score in cands[:self.MAX_CHECKS]:
             img = self._look(p)
             fine = find_by_template(img, self.template, center_px=self.principal, radius_px=r_px,
                                     threshold=0.0, mask=self.mask, scale=0.5)
             s = fine[0][1] if fine else 0.0
             tried.append(f"{s:.2f}")
-            if fine and s >= self.threshold:
-                p = self._to_machine(p, fine[0][0])
-                self.say(f"  next part at {np.round(p, 3).tolist()} (wide view {score:.2f}, close up {s:.2f})")
-                return p
-            self.rejected.append(p)
-        self.say(f"  no more parts found near the first pick position ({len(cands)} candidate(s); "
-                 f"close-up scores {', '.join(tried) or 'none'}; need {self.threshold}).")
-        return None
+            if not fine or s < self.threshold:
+                self.rejected.append(p)
+                continue
+            # keep the BEST close-up, not the first that passes: on 2026-11-11 pads passed
+            # at 0.67-0.72 while real parts scored 0.80-0.90
+            if best is None or s > best[0]:
+                best = (s, p, img, fine[0][0], score)
+            if s >= self.SURE:
+                break
+        if best is None:
+            self.say(f"  no more parts found ({len(cands)} candidate(s); close-up scores "
+                     f"{', '.join(tried) or 'none'}; need {self.threshold}).")
+            return None
+        s, p, img, px, score = best
+        q = self._to_machine(p, px)
+        # final centre from symmetry (independent of the template), if it agrees
+        c, _ = self._sym(img, px)
+        if c is not None and np.linalg.norm(c - np.asarray(px)) * self.motion.mm_per_px < 0.3:
+            q = self._to_machine(p, c)
+        self.say(f"  next part at {np.round(q, 3).tolist()} (wide view {score:.2f}, close up {s:.2f}; "
+                 f"checked {len(tried)})")
+        return q
 
 
 def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_pick, targets,
