@@ -19,6 +19,7 @@ from .motion import MotionMap
 from .servo import calibrate_motion, center_on, repeatability_test, visual_home
 from .lighting import make_light, grab_lit
 from .upcam import UpCam
+from .rotation import Rotator
 from .eventlog import EventLog
 
 
@@ -480,6 +481,9 @@ def cmd_place_test(cfg, a):
           f"(last {np.round(targets[-1], 3).tolist()}); box X {lo[0]:.2f}..{hi[0]:.2f} Y {lo[1]:.2f}..{hi[1]:.2f}")
     print(f"pick Z{a.pick_z}, place Z{a.place_z}, inspect Z{a.inspect_z}; up-camera correction "
           f"{'ON' if a.correct else 'OFF'}; accel {a.accel} mm/s^2; down_cam_offset {ms['down_cam_offset_mm']}")
+    if a.rotate_to is not None:
+        print(f"rotation: turn each part to {a.rotate_to} deg (re-check within {a.angle_tol} deg); "
+              f"the nozzle is first turned to motor 0")
     print("Visual home (VISION_HOME) must have been done since the last re-home, and the up light left on.")
     if input("Start? [y/N] ").strip().lower() != "y":
         return
@@ -511,6 +515,10 @@ def cmd_place_test(cfg, a):
             save(f"up{shots[0]}", img)
             return up.inspect(tuple(size), a.tol, log, img=img)
 
+        rotator = None
+        if a.rotate_to is not None:
+            rotator = Rotator.from_config(mr.gcode, cfg["rotation"])
+            rotator.zero()           # software tracks the angle from here (G28 zero)
         down_grab = lambda: down_lens.undistort(down_cam.fresh(settle_s=settle))
         principal = np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]])
         k_height = wd / (wd - a.thickness)
@@ -523,7 +531,8 @@ def cmd_place_test(cfg, a):
             mr, down_grab, down_motion, principal, up_inspect, ms, finder, targets,
             size_mm=tuple(a.size), thickness_mm=a.thickness, working_distance_mm=wd,
             pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
-            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save)
+            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save,
+            rotator=rotator, rotate_to=a.rotate_to, angle_tol_deg=a.angle_tol)
         summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
         print("\n" + json.dumps(summary, indent=2))
         path = C.rel(cfg, f"results/place_test_{stamp}.json")
@@ -626,7 +635,11 @@ def main():
     p.add_argument("--correct", action="store_true", help="apply the up-camera offset when placing")
     p.add_argument("--apply-offset", action="store_true",
                    help="save the suggested down_cam_offset_mm (needs >= 3 good cycles)")
-    p = sub.add_parser("set-offset", help="set the down-camera-to-nozzle offset (mm) directly")
+    p.add_argument("--rotate-to", type=float,
+                   help="turn each part to this machine-frame angle (deg, long axis from +X) before placing")
+    p.add_argument("--angle-tol", type=float, default=1.0,
+                   help="(with --rotate-to) turn again if the re-inspected angle is off by more, deg")
+    p = sub.add_parser("set-offset",help="set the down-camera-to-nozzle offset (mm) directly")
     p.add_argument("x", type=float)
     p.add_argument("y", type=float)
     p = sub.add_parser("datum")

@@ -65,6 +65,9 @@ stepper = "stepper_r"           # [manual_stepper stepper_r] in printer.cfg (rot
 # on your head (wiring, a hose without a rotary fitting) can wind up.
 range_deg = [-3600.0, 3600.0]
 symmetry_deg = 180.0            # 180 = a part looks the same turned 180 deg (resistors, caps)
+# Part angle change (machine frame, as the cameras report it) per motor degree. Measured
+# 2026-11-11 with inspect-up: motor 0 -> 30 -> 60 gave part 95.3 -> 66.1 -> 36.6 deg.
+direction = -1.0
 
 [log]
 db = "pnp_events.sqlite"

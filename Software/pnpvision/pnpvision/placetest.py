@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 
 from .detect import find_by_template, find_placed_part, outline_angle, symmetry_center
+from .rotation import rotate_xy, shortest_turn
 
 
 def _mean_frame(grab, n=2):
@@ -176,7 +177,8 @@ class PartFinder:
 def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_pick, targets,
                size_mm=(2.0, 1.25), thickness_mm=0.85, working_distance_mm=11.5,
                pick_z=37.8, place_z=37.7, inspect_z=34.5, approach_mm=0.8, vac_ms=300,
-               release_ms=500, correct=False, say=print, save=None):
+               release_ms=500, correct=False, say=print, save=None, rotator=None, rotate_to=None,
+               angle_tol_deg=1.0):
     backup = getattr(next_pick, "locate_near_centre", None)      # PartFinder provides it
     """Fill `targets` one by one. next_pick(last_pick_xy or None) -> XY of the next part (down
     camera centred on it) or None to stop. Returns a list of per-attempt dicts."""
@@ -257,6 +259,36 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
             continue
         fails_in_row = 0
         grabs.append(grab_fix + u)       # grab error of an uncorrected pick at this part
+        if rotate_to is not None:
+            # turn to the target angle (shortest way, mod 180), then look again: the offset
+            # turns with the part. Up to 2 turns if the first one lands more than angle_tol off.
+            mr.move_abs(z=inspect_z, feedrate=300)
+            turns, lost = [], False
+            for _ in range(2):
+                d = rotator.turn_to(rotate_to, ins["angle_deg"])
+                predicted = rotate_xy(u, d)
+                ins = up_inspect(size_mm)
+                if "offset_mm" not in ins:
+                    lost = True
+                    break
+                u_new = np.array(ins["offset_mm"], float)
+                turns.append({"turn_deg": d, "motor_deg": rotator.motor,
+                              "predicted_offset_mm": predicted.tolist(), "inspect": ins})
+                say(f"  turned {d:+.1f} deg (motor {rotator.motor:.1f}): now angle {ins['angle_deg']:.1f}, "
+                    f"offset {np.round(u_new, 3).tolist()} (predicted {np.round(predicted, 3).tolist()})")
+                u = u_new
+                if abs(shortest_turn(rotate_to, ins["angle_deg"], rotator.symmetry)) <= angle_tol_deg:
+                    break
+            mr.move_abs(z=mr.safe_travel_z, feedrate=600)
+            rec["turns"] = turns
+            if lost:
+                rec["status"] = "part lost while turning"
+                say("  part not seen after turning (dropped?) - skipping it")
+                mr.gcode("VALVE_OFF")
+                fails_in_row += 1
+                continue
+        rec["place_offset_mm"] = u.tolist()
+        rec["place_angle_deg"] = ins["angle_deg"]
         # photo of the empty target, place, photo again
         ref_t = look(target)
         n = target + off - (u if correct else 0.0)       # u: part relative to the nozzle
@@ -281,6 +313,11 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
         e = landed - target
         job = e if correct else e - u
         rec.update(status=status, landed=landed.tolist(), error_mm=e.tolist(), job_error_mm=job.tolist())
+        if found is not None:
+            rec["landed_angle_deg"] = float(down_motion.direction_mm(found.angle_px_deg))
+            if rotate_to is not None:
+                rec["angle_error_deg"] = -shortest_turn(rotate_to, rec["landed_angle_deg"], 180.0)
+                say(f"  landed at {rec['landed_angle_deg']:.1f} deg: angle error {rec['angle_error_deg']:+.2f} deg")
         if status != "ok":
             say("  (before/after check unsure; measured by finding the part itself, ~0.1 mm less "
                 "precise, left out of the offset average)")
@@ -304,4 +341,9 @@ def summarize(results, off, correct):
                    mean_landing_error_mm=e.mean(0).round(4).tolist(),
                    max_landing_error_mm=float(np.linalg.norm(e, axis=1).max().round(4)),
                    suggested_down_cam_offset_mm=(np.asarray(off) - job.mean(0)).round(4).tolist())
+    ang = [r["angle_error_deg"] for r in results if "angle_error_deg" in r]
+    if ang:
+        out.update(angle_errors_deg=np.round(ang, 2).tolist(),
+                   mean_angle_error_deg=round(float(np.mean(ang)), 2),
+                   max_abs_angle_error_deg=round(float(np.max(np.abs(ang))), 2))
     return out

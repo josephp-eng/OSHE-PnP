@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pnpvision.motion import MotionMap
 from pnpvision.detect import measure_part
 from pnpvision.placetest import PartFinder, place_test, summarize
+from pnpvision.rotation import Rotator, rotate_xy, shortest_turn
 
 OFF_SET = np.array([8.328, 53.059])          # what the software believes
 OFF_TRUE = OFF_SET + [0.12, -0.08]           # what the machine really has (calibration error)
@@ -24,6 +25,7 @@ L_MM, W_MM, T_MM, WD = 2.0, 1.25, 0.85, 11.5
 K = WD / (WD - T_MM)                                 # part tops look this much bigger / further out
 FIRST = np.array([165.0, 252.7])
 TARGETS = [np.array([155.39, 267.7]) + [-4.0 * i, 0] for i in range(3)]
+TRUE_DIR = -1.0                                      # part deg per motor deg (measured)
 PADS = [FIRST + d for d in ((-3.0, 2.5), (-1.6, 2.5), (4.0, -3.5), (5.4, -3.5), (2.5, 4.0), (-7.0, -3.0))]
 
 
@@ -33,8 +35,9 @@ class World:
         self.xyz = [FIRST[0] + 0.08, FIRST[1] - 0.06, 30.0]   # you centred the camera by eye
         self.safe_travel_z = 30.0
         self.parts = list(parts)        # (xy, angle_deg, stuck) lying on the board
-        self.held = None
+        self.held = None                # (offset from the nozzle axis, machine-frame angle)
         self.slip = np.array(slip)
+        self.motor = 0.0
 
     def position(self):
         return tuple(self.xyz)
@@ -57,13 +60,20 @@ class World:
             if line.startswith("VALVE_ON") and self.held is None and self.xyz[2] > 37.3:
                 for i, (p, ang, stuck) in enumerate(self.parts):
                     if np.linalg.norm(p - self.nozzle()) < 0.6 and not stuck:
-                        self.held = p - self.nozzle() + self.slip
+                        # board parts: `ang` 0 = long axis along machine Y (machine angle 90)
+                        self.held = (p - self.nozzle() + self.slip, ang + 90.0)
                         self.parts.pop(i)
                         break
             elif line.startswith("VALVE_OFF") and self.held is not None:
                 if self.xyz[2] > 37.3:
-                    self.parts.append((self.nozzle() + self.held, 0.0, False))
+                    self.parts.append((self.nozzle() + self.held[0], self.held[1] - 90.0, False))
                 self.held = None
+            elif line.startswith("MANUAL_STEPPER"):
+                m = float(line.split("MOVE=")[1].split()[0])
+                d = TRUE_DIR * (m - self.motor)
+                self.motor = m
+                if self.held is not None:
+                    self.held = (rotate_xy(self.held[0], d), self.held[1] + d)
 
     @staticmethod
     def _box(img, c, ax, ay, colour):
@@ -91,17 +101,19 @@ class World:
     def up_inspect(self, size):
         img = np.full((720, 1280), 105, np.uint8)
         if self.held is not None and np.linalg.norm(np.array(self.xyz[:2]) - UP_XY) < 0.01:
-            q = self.nozzle() + self.held - (UP_XY - OFF_TRUE)
-            self._box(img, P_UP + UP_M @ q, UP_M @ np.array([0, L_MM]), UP_M @ np.array([W_MM, 0]), 200)
+            q = self.nozzle() + self.held[0] - (UP_XY - OFF_TRUE)
+            a = np.radians(self.held[1])
+            lv, sv = np.array([np.cos(a), np.sin(a)]), np.array([-np.sin(a), np.cos(a)])
+            self._box(img, P_UP + UP_M @ q, UP_M @ (L_MM * lv), UP_M @ (W_MM * sv), 200)
         um = MotionMap(UP_M, "target")
         pm = measure_part(img, P_UP, 3.0 / um.mm_per_px, expected_px=(L_MM / um.mm_per_px, W_MM / um.mm_per_px))
         if pm is None:
             return {"ok": False, "reason": "no part found"}
         return {"ok": True, "reason": "", "offset_mm": um.offset_mm(np.array(pm.center_px) - P_UP).tolist(),
-                "angle_deg": 0.0, "size_mm": [pm.long_px * um.mm_per_px, pm.short_px * um.mm_per_px]}
+                "angle_deg": float(um.direction_mm(pm.angle_px_deg)), "size_mm": [pm.long_px * um.mm_per_px, pm.short_px * um.mm_per_px]}
 
 
-def _run(correct):
+def _run(correct, rotate_to=None):
     # first part (aimed by hand), a stuck one nearby, three more dropped loosely by hand
     parts = [(FIRST, 0.0, False), (FIRST + (-2.6, 0.3), 5.0, True), (FIRST + (4.2, 1.0), -8.0, False),
              (FIRST + (-6.0, -2.0), 92.0, False), (FIRST + (9.0, 3.5), 178.0, False)]
@@ -110,8 +122,10 @@ def _run(correct):
     mm = MotionMap(DOWN_M, "camera")
     finder = PartFinder(w, w.down_frame, mm, P_DOWN, (L_MM, W_MM), K, np.array(w.xyz[:2]),
                         avoid=TARGETS, say=lambda *a: None)
+    rot = Rotator(w.gcode, direction=TRUE_DIR) if rotate_to is not None else None
     res = place_test(w, w.down_frame, mm, P_DOWN, w.up_inspect, ms, finder, TARGETS,
-                     thickness_mm=T_MM, working_distance_mm=WD, correct=correct, say=lambda *a: None)
+                     thickness_mm=T_MM, working_distance_mm=WD, correct=correct, say=lambda *a: None,
+                     rotator=rot, rotate_to=rotate_to)
     return w, res, summarize(res, OFF_SET, correct)
 
 
@@ -132,3 +146,29 @@ def test_place_test_corrected_lands_off_by_offset_error():
     assert s["ok"] == 3, res
     assert np.allclose(s["mean_landing_error_mm"], OFF_SET - OFF_TRUE, atol=0.04), s
     assert np.allclose(s["suggested_down_cam_offset_mm"], OFF_TRUE, atol=0.04), s
+
+
+def test_shortest_turn():
+    assert shortest_turn(0, 95.3) == -95.3 + 180
+    assert abs(shortest_turn(0, 36.6) + 36.6) < 1e-9
+    assert abs(shortest_turn(30, -84.7) - (-65.3)) < 1e-9
+    assert shortest_turn(10, 10) == 0
+
+
+def test_place_test_rotates_parts_to_target():
+    for target in (0.0, 30.0, -60.0):
+        w, res, s = _run(correct=True, rotate_to=target)
+        assert s["ok"] == 3, res
+        assert s["max_abs_angle_error_deg"] < 1.5, s
+        # the offset must be re-measured after turning: an off-centre grab swings with the part
+        assert np.allclose(s["mean_landing_error_mm"], OFF_SET - OFF_TRUE, atol=0.04), s
+        for r in res:
+            for t in r.get("turns", []):
+                got = np.array(t["inspect"]["offset_mm"])
+                assert np.linalg.norm(got - t["predicted_offset_mm"]) < 0.03, t
+
+
+if __name__ == "__main__":
+    for n, f in list(globals().items()):
+        if n.startswith("test_"):
+            f(); print("PASS", n)
