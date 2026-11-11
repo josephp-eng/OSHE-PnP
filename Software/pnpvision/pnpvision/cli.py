@@ -129,17 +129,41 @@ def cmd_calibrate_motion(cfg, a):
             print(f"up camera: calibrating with the nozzle tip at Z{z0:.3f} (jogs stay at this height)")
         else:
             move = mr.move_rel
-        mmap = calibrate_motion(grab, locate, move, a.step, moving)
-        print(json.dumps(mmap.describe(), indent=2))
-        mmap.save(C.rel(cfg, cfg["cameras"][a.cam]["motion_map"]))
-        if a.cam == "up" and a.find_center:
+        map_path = C.rel(cfg, cfg["cameras"][a.cam]["motion_map"])
+        if a.center_only:
+            if a.cam != "up":
+                raise SystemExit("--center-only is for --cam up")
+            mmap = MotionMap.load(map_path)
+            print("using the existing motion map:", round(mmap.mm_per_px, 5), "mm/px")
+        else:
+            mmap = calibrate_motion(grab, locate, move, a.step, moving)
+            print(json.dumps(mmap.describe(), indent=2))
+            mmap.save(map_path)
+        if a.cam == "up" and (a.find_center or a.center_only):
+            ms_path = C.rel(cfg, "calibration/machine.json")
+            old = MS.load(ms_path)
             target = (lens.newK[0, 2], lens.newK[1, 2])
             res = center_on(grab, locate, move, mmap, target, max_step_mm=mr.MAX_LOW_XY_MM * 0.8)
             print("centering:", res)
             if res["converged"]:
                 x, y, z = mr.position()
-                MS.save(C.rel(cfg, "calibration/machine.json"), up_cam_xy_mm=[x, y], up_cam_focus_z=z)
+                upd = {"up_cam_xy_mm": [x, y], "up_cam_focus_z": z}
                 print("up camera optical axis at machine XY", (x, y), "nozzle tip in focus at Z", z)
+                if any(old["up_cam_xy_mm"]):
+                    # Up camera and down-camera frame are both fixed to the plate, so a change here
+                    # means the nozzle moved relative to the down camera, by the same amount.
+                    d = np.subtract([x, y], old["up_cam_xy_mm"])
+                    off = np.add(old["down_cam_offset_mm"], d)
+                    print(f"change since last time: {d.round(3)} mm -> down_cam_offset_mm would be "
+                          f"{off.round(3)} (now {np.round(old['down_cam_offset_mm'], 3)})")
+                    if a.update_offset:
+                        upd["down_cam_offset_mm"] = off.tolist()
+                        print("down_cam_offset_mm updated")
+                    elif np.linalg.norm(d) > 0.02:
+                        print("NOT saved. True only if the nozzle moved, not the up camera: check with "
+                              "`datum` first, then re-run with --update-offset to save both.")
+                        return
+                MS.save(ms_path, **upd)
     finally:
         cam.stop()
 
@@ -408,6 +432,10 @@ def main():
     p.add_argument("--step", type=float, default=1.0, help="jog size, mm")
     add_dot_args(p)
     p.add_argument("--find-center", action="store_true", help="(up) also record nozzle-over-camera XY")
+    p.add_argument("--center-only", action="store_true",
+                   help="(up) keep the motion map, only re-centre (e.g. after the nozzle was remounted)")
+    p.add_argument("--update-offset", action="store_true",
+                   help="(up) also shift down_cam_offset_mm by the change in the centre")
     p = sub.add_parser("calibrate-offset")
     add_dot_args(p)
 
