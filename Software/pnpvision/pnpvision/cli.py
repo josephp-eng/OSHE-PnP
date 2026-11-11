@@ -464,7 +464,10 @@ def cmd_place_test(cfg, a):
     step = np.array(a.step, float)
     targets = [np.array(a.target, float) + i * step for i in range(a.n)]
     lo, hi = np.min(targets, 0), np.max(targets, 0)
-    print(f"pick spot (down camera) ~{a.pick}, search radius {a.search} mm, part {a.size[0]}x{a.size[1]} mm")
+    last_pick = np.array(a.pick, float) + (a.n - 1) * np.array(a.pick_step, float)
+    print(f"pick spot (down camera) ~{a.pick}" + (f" moving {a.pick_step} mm per part, last "
+          f"{np.round(last_pick, 2).tolist()}" if any(a.pick_step) else " (same spot every part)")
+          + f", search radius {a.search} mm, part {a.size[0]}x{a.size[1]} mm")
     print(f"{a.n} targets from {np.round(targets[0], 3).tolist()} every {a.step} mm "
           f"(last {np.round(targets[-1], 3).tolist()}); box X {lo[0]:.2f}..{hi[0]:.2f} Y {lo[1]:.2f}..{hi[1]:.2f}")
     print(f"pick Z{a.pick_z}, place Z{a.place_z}, inspect Z{a.inspect_z}; up-camera correction "
@@ -500,7 +503,7 @@ def cmd_place_test(cfg, a):
             np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]]), up_inspect, ms,
             np.array(a.pick, float), targets, size_mm=tuple(a.size), search_mm=a.search,
             pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
-            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct)
+            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, pick_step=tuple(a.pick_step))
         summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
         print("\n" + json.dumps(summary, indent=2))
         path = C.rel(cfg, f"results/place_test_{stamp}.json")
@@ -580,6 +583,8 @@ def main():
                    help="first place target, down camera centred on it (toolhead XY)")
     p.add_argument("--step", type=float, nargs=2, default=[4.0, 0.0], metavar=("DX", "DY"),
                    help="target spacing, mm (default 4 0 = along +X)")
+    p.add_argument("--pick-step", type=float, nargs=2, default=[0.0, 0.0], metavar=("DX", "DY"),
+                   help="move the pick spot by this much each cycle (default 0 0 = same spot)")
     p.add_argument("--n", type=int, default=5, help="cycles (parts)")
     p.add_argument("--size", type=float, nargs=2, default=[2.0, 1.25], metavar=("L", "W"))
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")

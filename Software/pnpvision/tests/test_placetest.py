@@ -95,18 +95,19 @@ class World:
 
 
 def _run(correct):
+    # parts and targets both march left (X decreasing), like the real test layout
     w = World(part_xy=(159.9, 253.2))
-    supply = iter([(159.0, 254.1), (160.1, 253.3)])
+    supply = iter([(155.0, 254.1), (151.1, 253.3)])
 
     def next_part(_prompt):
         w.parts.append(np.array(next(supply)))      # "put the next part at the pick spot"
         return ""
 
     ms = {"down_cam_offset_mm": OFF_SET.tolist(), "up_cam_xy_mm": UP_XY.tolist()}
-    targets = [np.array([159.39, 267.7]) + [4.0 * i, 0] for i in range(3)]
+    targets = [np.array([159.39, 267.7]) + [-4.0 * i, 0] for i in range(3)]
     res = place_test(w, w.down_frame, MotionMap(DOWN_M, "camera"), P_DOWN, w.up_inspect, ms,
                      np.array([159.39, 253.7]), targets, correct=correct, wait_next=next_part,
-                     say=lambda *a: None)
+                     say=lambda *a: None, pick_step=(-4.0, 0.0))
     return res, summarize(res, OFF_SET, correct)
 
 

@@ -45,13 +45,16 @@ def find_and_center(mr, grab, motion, principal, size_mm, search_mm, tol_mm=0.01
 def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, pick_xy, targets,
                size_mm=(2.0, 1.25), search_mm=3.0, pick_z=37.8, place_z=37.7, inspect_z=34.5,
                approach_mm=0.8, vac_ms=300, release_ms=500, correct=False, wait_next=input,
-               say=print):
-    """Run len(targets) cycles. Returns a list of per-cycle dicts (see the module docstring)."""
+               say=print, pick_step=(0.0, 0.0)):
+    """Run len(targets) cycles. Returns a list of per-cycle dicts (see the module docstring).
+    pick_step: the pick spot moves by this much each cycle (0, 0 = always the same spot)."""
     off = np.array(ms["down_cam_offset_mm"], float)
     up_xy = np.array(ms["up_cam_xy_mm"], float)
+    pick0 = np.asarray(pick_xy, float)
     results = []
     for k, target in enumerate(targets):
         target = np.asarray(target, float)
+        pick_xy = pick0 + k * np.asarray(pick_step, float)
         rec = {"cycle": k + 1, "target": target.tolist()}
         results.append(rec)
         say(f"\n--- cycle {k + 1}/{len(targets)} ---")
@@ -107,8 +110,9 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, pick_
                         f"(|e| {np.linalg.norm(e):.3f}); job error {np.round(job, 3)} mm")
         if k + 1 < len(targets):
             mr.move_abs(z=mr.safe_travel_z, feedrate=600)
-            ans = wait_next(f"Put the next part at the pick spot (or the same part back), then Enter "
-                            f"(q + Enter to stop): ")
+            nxt = pick0 + (k + 1) * np.asarray(pick_step, float)
+            ans = wait_next(f"Put the next part near X{nxt[0]:.2f} Y{nxt[1]:.2f} (down-camera position), "
+                            f"then Enter (q + Enter to stop): ")
             if str(ans).strip().lower().startswith("q"):
                 break
     return results
