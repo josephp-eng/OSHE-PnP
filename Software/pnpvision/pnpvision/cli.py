@@ -469,7 +469,27 @@ def cmd_place_test(cfg, a):
         if not (mr.safe_travel_z < z <= 40.0):
             raise SystemExit(f"--{name}-z {z} looks wrong (expected between Z{mr.safe_travel_z} and Z40)")
     step = np.array(a.step, float)
-    targets = [np.array(a.target, float) + i * step for i in range(a.n)]
+    if a.parts:
+        # targets = footprints of the aligned board (align-board first); angle from the job
+        from .board import BoardPose
+        if not a.job or not ms.get("board_pose"):
+            raise SystemExit("--parts needs --job and a saved board pose (run align-board first)")
+        with open(a.job, encoding="utf-8") as f:
+            by_ref = {p["ref"]: p for p in json.load(f)["placements"]}
+        missing = [r for r in a.parts if r not in by_ref]
+        if missing:
+            raise SystemExit(f"not in the job: {missing}")
+        pose = BoardPose.from_dict(ms["board_pose"]["pose"])
+        targets = [pose.to_machine([by_ref[r]["x"], by_ref[r]["y"]]) for r in a.parts]
+        a.rotate_to = [round(pose.part_angle(by_ref[r]["rot"]), 3) for r in a.parts]
+        a.n = len(targets)
+        for r, t, ang in zip(a.parts, targets, a.rotate_to):
+            print(f"  {r} ({by_ref[r]['package']}, rot {by_ref[r]['rot']}): target {np.round(t, 3).tolist()}, "
+                  f"machine angle {ang:.1f} deg")
+    elif a.target is None:
+        raise SystemExit("give --target X Y (or --job and --parts)")
+    else:
+        targets = [np.array(a.target, float) + i * step for i in range(a.n)]
     lo, hi = np.min(targets, 0), np.max(targets, 0)
     wd = cfg["cameras"]["down"].get("working_distance_mm", 11.5)
     x0, y0, _ = mr.position()
@@ -674,7 +694,7 @@ def main():
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
     p = sub.add_parser("place-test", help="centre the down camera on a part first; then pick, inspect, "
                                           "place, measure, and find the next parts automatically")
-    p.add_argument("--target", type=float, nargs=2, required=True, metavar=("X", "Y"),
+    p.add_argument("--target", type=float, nargs=2, metavar=("X", "Y"),
                    help="first place target, down camera centred on it (toolhead XY)")
     p.add_argument("--step", type=float, nargs=2, default=[4.0, 0.0], metavar=("DX", "DY"),
                    help="target spacing, mm (default 4 0 = along +X)")
@@ -696,6 +716,10 @@ def main():
                         "several angles = used in turn (target 1 gets the first, ...)")
     p.add_argument("--angle-tol", type=float, default=1.0,
                    help="(with --rotate-to) turn again if the re-inspected angle is off by more, deg")
+    p.add_argument("--job", help="job file, for --parts")
+    p.add_argument("--parts", nargs="+", metavar="REF",
+                   help="place onto these footprints of the aligned board (align-board first), turned to "
+                        "their job angle; replaces --target/--step/--n/--rotate-to")
     p = sub.add_parser("align-board", help="centre the down camera on alignment pad A first; finds the "
                        "board's position and rotation from the job's alignment pads")
     p.add_argument("job", help="oshe-pnp-job/1 file")
