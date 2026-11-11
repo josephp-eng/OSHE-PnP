@@ -68,19 +68,33 @@ class PartMeasure:
     area_px: float
 
 
-def measure_part(img, nozzle_px, search_radius_px, min_area_px=200):
+def measure_part(img, nozzle_px, search_radius_px, min_area_px=200, expected_px=None):
     """Segment the part held on the nozzle (up camera) and fit a rotated rectangle.
-    FIRST-CUT: global Otsu on a crop around the nozzle. Real images will need tuning
-    (lighting, nozzle colour, background); the output contract is what matters now."""
+
+    expected_px=(long, short) body size in pixels: try several black/white cut-offs and keep
+    the blob whose size matches best. Needed for chip parts, whose bright metal ends and
+    mid-grey body split apart under Otsu (it measured one end, 1.37 x 0.58 mm, of an 0805).
+    The cut-offs are relative to the median of the crop (= the nozzle face behind the part).
+    Without expected_px: Otsu, blob closest to the nozzle axis (first-cut behaviour)."""
     h, w = img.shape[:2]
     nx, ny = nozzle_px
     r = int(search_radius_px)
     x0, y0 = max(int(nx) - r, 0), max(int(ny) - r, 0)
     x1, y1 = min(int(nx) + r, w), min(int(ny) + r, h)
     crop = cv2.GaussianBlur(_gray(img)[y0:y1, x0:x1], (5, 5), 0)
-    best = None
+    masks = []
     for mode in (cv2.THRESH_BINARY_INV, cv2.THRESH_BINARY):
-        _, bw = cv2.threshold(crop, 0, 255, mode | cv2.THRESH_OTSU)
+        masks.append(cv2.threshold(crop, 0, 255, mode | cv2.THRESH_OTSU)[1])
+    if expected_px is not None:
+        med = float(np.median(crop))
+        k = np.ones((3, 3), np.uint8)
+        for d in (8, 12, 16, 20, 25, 30, 40, 50):
+            for mode, t in ((cv2.THRESH_BINARY, med + d), (cv2.THRESH_BINARY_INV, med - d)):
+                if 0 < t < 255:
+                    bw = cv2.threshold(crop, t, 255, mode)[1]
+                    masks.append(cv2.morphologyEx(bw, cv2.MORPH_OPEN, k))
+    best = None
+    for bw in masks:
         cnts, _ = cv2.findContours(bw, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         for c in cnts:
             a = cv2.contourArea(c)
@@ -93,8 +107,12 @@ def measure_part(img, nozzle_px, search_radius_px, min_area_px=200):
             if rw < rh:
                 rw, rh, ang = rh, rw, ang + 90.0
             ang = (ang + 90.0) % 180.0 - 90.0
-            # prefer the blob closest to the nozzle axis
             d = np.hypot(cx + x0 - nx, cy + y0 - ny)
-            if best is None or d < best[0]:
-                best = (d, PartMeasure((cx + x0, cy + y0), float(rw), float(rh), float(ang), float(a)))
+            if expected_px is None:
+                score = d                      # prefer the blob closest to the nozzle axis
+            else:
+                el, es = expected_px
+                score = abs(rw - el) / el + abs(rh - es) / es + 0.2 * d / max(r, 1)
+            if best is None or score < best[0]:
+                best = (score, PartMeasure((cx + x0, cy + y0), float(rw), float(rh), float(ang), float(a)))
     return None if best is None else best[1]

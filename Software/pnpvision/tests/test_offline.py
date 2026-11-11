@@ -264,6 +264,20 @@ def test_measure_part_up_camera():
     assert abs(mm.direction_mm(30) - (-30)) < 2                # mirror flips angle sense
 
 
+def test_measure_chip_with_bright_ends():
+    # Like the real 0805 under the up light: nozzle face ~105, grey body ~135, metal ends ~215.
+    # Otsu alone splits the ends from the body; with the expected size the whole part is found.
+    img = np.full((720, 1280), 105, np.uint8)
+    cv2.rectangle(img, (690, 360), (766, 408), 135, -1)          # body 77 x 49 px
+    cv2.rectangle(img, (690, 360), (706, 408), 215, -1)          # end 1
+    cv2.rectangle(img, (750, 360), (766, 408), 215, -1)          # end 2
+    img = cv2.GaussianBlur(img, (5, 5), 0)
+    p = measure_part(img, (724, 382), 85, expected_px=(76, 47))
+    assert p is not None
+    assert abs(p.long_px - 77) < 3 and abs(p.short_px - 49) < 3, (p.long_px, p.short_px)
+    assert abs(p.center_px[0] - 728) < 1.5 and abs(p.center_px[1] - 384) < 1.5
+
+
 def test_eventlog_cph():
     log = EventLog(os.path.join(tempfile.mkdtemp(), "t.sqlite"))
     for i in range(11): log.log("place", ok=True, ts=1000 + i * 4.0)   # 4 s per part

@@ -6,3 +6,6 @@ Software/Klipper/from-pi/moonraker-obico*.cfg
 Software/Klipper/from-pi/.moonraker.conf.bkp
 Software/Klipper/from-pi/*.zip
 Software/Klipper/from-pi/*.conf.20*
+
+# Camera captures copied from the Pi for debugging (large, per-machine)
+Software/pnpvision/captures/

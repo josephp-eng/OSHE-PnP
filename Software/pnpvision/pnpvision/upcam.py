@@ -35,7 +35,8 @@ class UpCam:
             # Look only a little beyond the part itself. A wide search finds the nozzle's own
             # concentric rings (the collar measured 8.3 mm) instead of a small chip.
             radius_mm = min(radius_mm, 0.5 * float(np.hypot(*expected_mm)) + 1.0)
-        pm = measure_part(img, self.nozzle_px, radius_mm / mpp)
+        exp_px = None if expected_mm is None else tuple(sorted(expected_mm, reverse=True)[i] / mpp for i in (0, 1))
+        pm = measure_part(img, self.nozzle_px, radius_mm / mpp, expected_px=exp_px)
         if pm is None:
             res = {"ok": False, "reason": "no part found"}
         else:

@@ -497,7 +497,7 @@ def main():
     p = sub.add_parser("light-test"); p.add_argument("--n", type=int, default=3)
     p = sub.add_parser("inspect-up")
     p.add_argument("--size", type=float, nargs=2, metavar=("L", "W"), help="expected part body, mm")
-    p.add_argument("--tol", type=float, default=0.15)
+    p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
     p = sub.add_parser("datum")
     p.add_argument("--teach", action="store_true"); p.add_argument("--reference", action="store_true")
 
