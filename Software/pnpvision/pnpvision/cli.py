@@ -548,6 +548,14 @@ def cmd_place_test(cfg, a):
         up_cam.stop()
 
 
+def cmd_set_offset(cfg, a):
+    """Write down_cam_offset_mm directly (e.g. the average job error of several place-tests)."""
+    path = C.rel(cfg, "calibration/machine.json")
+    old = MS.load(path)["down_cam_offset_mm"]
+    MS.save(path, down_cam_offset_mm=[float(a.x), float(a.y)])
+    print(f"down_cam_offset_mm: {np.round(old, 4).tolist()} -> {[a.x, a.y]}")
+
+
 def main():
     ap = argparse.ArgumentParser(prog="pnpvision")
     ap.add_argument("--config", default="config.toml")
@@ -618,12 +626,16 @@ def main():
     p.add_argument("--correct", action="store_true", help="apply the up-camera offset when placing")
     p.add_argument("--apply-offset", action="store_true",
                    help="save the suggested down_cam_offset_mm (needs >= 3 good cycles)")
+    p = sub.add_parser("set-offset", help="set the down-camera-to-nozzle offset (mm) directly")
+    p.add_argument("x", type=float)
+    p.add_argument("y", type=float)
     p = sub.add_parser("datum")
     p.add_argument("--teach", action="store_true"); p.add_argument("--reference", action="store_true")
 
     a = ap.parse_args()
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep, "place-test": cmd_place_test,
+     "set-offset": cmd_set_offset,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)
