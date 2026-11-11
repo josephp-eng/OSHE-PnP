@@ -30,7 +30,12 @@ class UpCam:
         Returns dict(ok, reason, offset_mm=[x,y] machine frame, angle_deg, size_mm=[L,W])."""
         img = self.frame() if img is None else img
         mpp = self.motion.mm_per_px
-        pm = measure_part(img, self.nozzle_px, self.search_radius_mm / mpp)
+        radius_mm = self.search_radius_mm
+        if expected_mm is not None:
+            # Look only a little beyond the part itself. A wide search finds the nozzle's own
+            # concentric rings (the collar measured 8.3 mm) instead of a small chip.
+            radius_mm = min(radius_mm, 0.5 * float(np.hypot(*expected_mm)) + 1.0)
+        pm = measure_part(img, self.nozzle_px, radius_mm / mpp)
         if pm is None:
             res = {"ok": False, "reason": "no part found"}
         else:
