@@ -557,6 +557,62 @@ def cmd_place_test(cfg, a):
         up_cam.stop()
 
 
+def cmd_align_board(cfg, a):
+    """Centre the down camera on alignment pad A (either pad of that part); finds all the job's
+    alignment pads, fits the board's position and rotation, saves calibration/board_pose.json."""
+    from .board import align_board
+    with open(a.job, encoding="utf-8") as f:
+        job = json.load(f)
+    if job.get("format") != "oshe-pnp-job/1":
+        raise SystemExit(f"{a.job}: not an oshe-pnp-job/1 file")
+    mr = make_mr(cfg)
+    x0, y0, _ = mr.position()
+    pa = job["alignment"][0]
+    print(f"board '{job['board']['name']}' ({job['board']['side']}), {len(job['alignment'])} alignment pads; "
+          f"start: camera on pad {pa['name']} ({pa.get('ref', '')} pad {pa.get('pad', '')}) at "
+          f"[{x0:.3f}, {y0:.3f}], board turned about {a.rot} deg (CCW seen from above)")
+    cam, lens = open_cam(cfg, "down")
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    img_dir = f"align_{stamp}"
+    os.makedirs(img_dir, exist_ok=True)
+    save = lambda name, img: cv2.imwrite(os.path.join(img_dir, name + ".png"), img)
+    try:
+        motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
+        principal = np.array([lens.newK[0, 2], lens.newK[1, 2]])
+        grab = lambda: lens.undistort(cam.fresh(settle_s=cfg["moonraker"]["settle_s"]))
+        try:
+            pose, out = align_board(mr, grab, motion, principal, job, (x0, y0), a.rot,
+                                    search_mm=a.search, min_score=a.min_score, save=save)
+        except RuntimeError as e:
+            raise SystemExit(f"alignment failed: {e} (images in {img_dir}/)")
+        for p in out["pads"]:
+            print(f"  pad {p['name']}: at {np.round(p['machine'], 3).tolist()}, residual "
+                  f"{np.round(p['residual_mm'], 3).tolist()} mm")
+        print(f"board rotation {pose.angle_deg:.3f} deg, origin at {np.round(pose.t, 3).tolist()}, "
+              f"scale {out['scale']:.4f}, worst pad residual {out['max_residual_mm']:.3f} mm")
+        out["job"] = os.path.abspath(a.job)
+        MS.save(C.rel(cfg, "calibration/machine.json"), board_pose=out)
+        print("saved as board_pose in calibration/machine.json")
+        # look at some placements: the crosshair should sit between each part's pads
+        refs = a.show or [p["ref"] for p in job["alignment"] if p.get("ref")]
+        by_ref = {p["ref"]: p for p in job["placements"]}
+        for ref in refs:
+            if ref not in by_ref:
+                print(f"  (no placement {ref})")
+                continue
+            pl = by_ref[ref]
+            xy = pose.to_machine([pl["x"], pl["y"]])
+            mr.move_abs(x=float(xy[0]), y=float(xy[1]))
+            img = grab()
+            cv2.drawMarker(img, tuple(int(v) for v in principal), (0, 255, 255), cv2.MARKER_CROSS, 80, 2)
+            save(f"show_{ref}", img)
+            print(f"  {ref} ({pl['package']}, rot {pl['rot']}): camera at {np.round(xy, 3).tolist()}, "
+                  f"part angle on the machine {pose.part_angle(pl['rot']):.1f} deg")
+        print(f"images in {img_dir}/")
+    finally:
+        cam.stop()
+
+
 def cmd_set_offset(cfg, a):
     """Write down_cam_offset_mm directly (e.g. the average job error of several place-tests)."""
     path = C.rel(cfg, "calibration/machine.json")
@@ -639,7 +695,16 @@ def main():
                    help="turn each part to this machine-frame angle (deg, long axis from +X) before placing")
     p.add_argument("--angle-tol", type=float, default=1.0,
                    help="(with --rotate-to) turn again if the re-inspected angle is off by more, deg")
-    p = sub.add_parser("set-offset",help="set the down-camera-to-nozzle offset (mm) directly")
+    p = sub.add_parser("align-board", help="centre the down camera on alignment pad A first; finds the "
+                       "board's position and rotation from the job's alignment pads")
+    p.add_argument("job", help="oshe-pnp-job/1 file")
+    p.add_argument("--rot", type=float, required=True,
+                   help="rough board rotation on the plate, deg CCW seen from above (within ~5 deg)")
+    p.add_argument("--search", type=float, default=3.0, help="look this far around each predicted pad, mm")
+    p.add_argument("--min-score", type=float, default=0.5, help="pad template match threshold")
+    p.add_argument("--show", nargs="*", help="placements (refs) to photograph afterwards "
+                   "(default: the parts that own the alignment pads)")
+    p = sub.add_parser("set-offset", help="set the down-camera-to-nozzle offset (mm) directly")
     p.add_argument("x", type=float)
     p.add_argument("y", type=float)
     p = sub.add_parser("datum")
@@ -648,7 +713,7 @@ def main():
     a = ap.parse_args()
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep, "place-test": cmd_place_test,
-     "set-offset": cmd_set_offset,
+     "set-offset": cmd_set_offset, "align-board": cmd_align_board,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)
