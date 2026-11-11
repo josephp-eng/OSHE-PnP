@@ -9,3 +9,9 @@ Software/Klipper/from-pi/*.conf.20*
 
 # Camera captures copied from the Pi for debugging (large, per-machine)
 Software/pnpvision/captures/
+
+# Outputs the pnpvision commands write on the Pi
+Software/pnpvision/*.png
+Software/pnpvision/place_test_*/
+Software/pnpvision/results/
+Software/pnpvision/*.sqlite

@@ -68,6 +68,40 @@ class PartMeasure:
     area_px: float
 
 
+def find_parts_by_difference(ref, img, expected_px, threshold=None, size_tol=0.45, min_fill=0.6):
+    """Parts that appeared between `ref` (scene without them) and `img`, taken from the SAME
+    camera position. Works for any part colour on any background (pads, silkscreen, tape):
+    only what changed counts. expected_px=(long, short) body size; returns PartMeasure list.
+    Colour difference (largest channel change), so a tan part on green board counts even
+    where the two have similar grey levels."""
+    a = cv2.GaussianBlur(ref, (5, 5), 0).astype(np.int16)
+    b = cv2.GaussianBlur(img, (5, 5), 0).astype(np.int16)
+    d = np.abs(b - a)
+    d = d.max(axis=2) if d.ndim == 3 else d
+    d = d.astype(np.uint8)
+    t = threshold if threshold is not None else max(25.0, float(np.median(d)) + 20.0)
+    mask = (d > t).astype(np.uint8) * 255
+    el, es = expected_px
+    kc = max(3, int(es * 0.3)) | 1                  # close gaps inside the part (e.g. its body
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,  # matching the background's brightness)
+                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kc, kc)))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    out = []
+    for c in cnts:
+        area = cv2.contourArea(c)
+        (cx, cy), (rw, rh), ang = cv2.minAreaRect(c)
+        if rw < rh:
+            rw, rh, ang = rh, rw, ang + 90.0
+        if rw <= 0 or rh <= 0:
+            continue
+        if abs(rw - el) / el > size_tol or abs(rh - es) / es > size_tol or area / (rw * rh) < min_fill:
+            continue
+        ang = (ang + 90.0) % 180.0 - 90.0
+        out.append(PartMeasure((cx, cy), float(rw), float(rh), float(ang), float(area)))
+    return out
+
+
 def measure_part(img, nozzle_px, search_radius_px, min_area_px=200, expected_px=None):
     """Segment the part held on the nozzle (up camera) and fit a rotated rectangle.
 
@@ -112,7 +146,8 @@ def measure_part(img, nozzle_px, search_radius_px, min_area_px=200, expected_px=
                 score = d                      # prefer the blob closest to the nozzle axis
             else:
                 el, es = expected_px
-                score = abs(rw - el) / el + abs(rh - es) / es + 0.2 * d / max(r, 1)
+                fill = a / max(rw * rh, 1.0)   # 1 = solid rectangle; rings/crescents score low
+                score = abs(rw - el) / el + abs(rh - es) / es + 0.2 * d / max(r, 1) + (1.0 - fill)
             if best is None or score < best[0]:
                 best = (score, PartMeasure((cx + x0, cy + y0), float(rw), float(rh), float(ang), float(a)))
     return None if best is None else best[1]

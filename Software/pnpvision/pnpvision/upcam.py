@@ -11,6 +11,8 @@ from .lighting import grab_lit
 
 
 class UpCam:
+    MIN_FILL = 0.75     # blob area / its rotated bounding box; below this it is not a chip
+
     def __init__(self, cam, lens, light, motion, nozzle_px=None, settle_s=0.2,
                  ambient_subtract=False, keep_on=False, search_radius_mm=6.0):
         self.cam, self.lens, self.light, self.motion = cam, lens, light, motion
@@ -42,11 +44,18 @@ class UpCam:
         else:
             off = self.motion.offset_mm(np.array(pm.center_px) - self.nozzle_px)
             size = sorted([pm.long_px * mpp, pm.short_px * mpp], reverse=True)
+            fill = pm.area_px / max(pm.long_px * pm.short_px, 1.0)
             res = {"ok": True, "reason": "",
                    "offset_mm": [float(off[0]), float(off[1])],
                    "angle_deg": float(self.motion.direction_mm(pm.angle_px_deg)),
-                   "size_mm": [float(size[0]), float(size[1])], "area_px": float(pm.area_px)}
-            if expected_mm is not None:
+                   "size_mm": [float(size[0]), float(size[1])], "area_px": float(pm.area_px),
+                   "fill": float(fill)}
+            if fill < self.MIN_FILL:
+                # a real chip fills its bounding box (0.89-0.92 measured); an empty nozzle's
+                # rings give crescents (0.40 measured on 2026-11-11)
+                res = {"ok": False, "reason": f"no part found (best blob fill {fill:.2f} is not a rectangle)",
+                       "fill": float(fill)}
+            elif expected_mm is not None:
                 exp = sorted(expected_mm, reverse=True)
                 bad = [abs(s - e) > tol_mm for s, e in zip(size, exp)]
                 if any(bad):

@@ -37,6 +37,7 @@ height = 720
 snapshot_url = "http://localhost/webcam/?action=snapshot"
 calibration = "calibration/calibration_cam_down.npz"
 motion_map = "calibration/motion_down.json"
+working_distance_mm = 11.5    # lens to PCB top; image scale changes ~1/11.5 per mm of height
 width = 1920
 height = 1080
 

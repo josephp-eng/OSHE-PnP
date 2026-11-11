@@ -193,6 +193,9 @@ def cmd_calibrate_motion(cfg, a):
                     if a.update_offset:
                         upd["down_cam_offset_mm"] = off.tolist()
                         print("down_cam_offset_mm updated")
+                    elif a.keep_offset:
+                        print("saved the new centre only; down_cam_offset_mm unchanged (the feature "
+                              "changed, not the nozzle)")
                     elif np.linalg.norm(d) > 0.02:
                         print("NOT saved. True only if the nozzle moved, not the up camera: check with "
                               "`datum` first, then re-run with --update-offset to save both.")
@@ -451,23 +454,26 @@ def cmd_inspect_up(cfg, a):
 
 
 def cmd_place_test(cfg, a):
-    """Find -> pick -> up-camera inspect -> place -> measure, a.n times with a pause between."""
+    """Pick parts from an area seen by the down camera, inspect, place on a row of targets, measure."""
     from .placetest import place_test, summarize
     mr = make_mr(cfg)
     ms_path = C.rel(cfg, "calibration/machine.json")
     ms = MS.load(ms_path)
     if not any(ms["up_cam_xy_mm"]) or not any(ms["down_cam_offset_mm"]):
         raise SystemExit("up camera centre / down-camera offset not calibrated yet")
+    if a.inspect_z is None:
+        a.inspect_z = ms.get("up_cam_focus_z") or 34.5
     for name, z in (("pick", a.pick_z), ("place", a.place_z), ("inspect", a.inspect_z)):
         if not (mr.safe_travel_z < z <= 40.0):
             raise SystemExit(f"--{name}-z {z} looks wrong (expected between Z{mr.safe_travel_z} and Z40)")
     step = np.array(a.step, float)
     targets = [np.array(a.target, float) + i * step for i in range(a.n)]
     lo, hi = np.min(targets, 0), np.max(targets, 0)
-    last_pick = np.array(a.pick, float) + (a.n - 1) * np.array(a.pick_step, float)
-    print(f"pick spot (down camera) ~{a.pick}" + (f" moving {a.pick_step} mm per part, last "
-          f"{np.round(last_pick, 2).tolist()}" if any(a.pick_step) else " (same spot every part)")
-          + f", search radius {a.search} mm, part {a.size[0]}x{a.size[1]} mm")
+    wd = cfg["cameras"]["down"].get("working_distance_mm", 11.5)
+    # park the head toward the back while you place parts (toolhead Y + 40, inside the limits)
+    park_xy = np.array([a.pick[0], min(a.pick[1] + 40.0, mr.limits["y"][1] - 5.0)])
+    print(f"pick area: whatever the down camera sees from {a.pick} (about 32 x 18 mm); "
+          f"part {a.size[0]}x{a.size[1]}x{a.thickness} mm")
     print(f"{a.n} targets from {np.round(targets[0], 3).tolist()} every {a.step} mm "
           f"(last {np.round(targets[-1], 3).tolist()}); box X {lo[0]:.2f}..{hi[0]:.2f} Y {lo[1]:.2f}..{hi[1]:.2f}")
     print(f"pick Z{a.pick_z}, place Z{a.place_z}, inspect Z{a.inspect_z}; up-camera correction "
@@ -490,20 +496,26 @@ def cmd_place_test(cfg, a):
                    search_radius_mm=lc["search_radius_mm"])
         log = EventLog(C.rel(cfg, cfg["log"]["db"]))
         stamp = time.strftime("%Y%m%d_%H%M%S")
+        img_dir = f"place_test_{stamp}"
+        os.makedirs(img_dir, exist_ok=True)
         shots = [0]
+
+        def save(name, img):
+            cv2.imwrite(os.path.join(img_dir, name + ".png"), img)
 
         def up_inspect(size):
             img = up.frame()
             shots[0] += 1
-            cv2.imwrite(f"place_test_{stamp}_up{shots[0]}.png", img)
+            save(f"up{shots[0]}", img)
             return up.inspect(tuple(size), a.tol, log, img=img)
 
         results = place_test(
             mr, lambda: down_lens.undistort(down_cam.fresh(settle_s=settle)), down_motion,
             np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]]), up_inspect, ms,
-            np.array(a.pick, float), targets, size_mm=tuple(a.size), search_mm=a.search,
-            pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
-            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, pick_step=tuple(a.pick_step))
+            np.array(a.pick, float), targets, size_mm=tuple(a.size), thickness_mm=a.thickness,
+            working_distance_mm=wd, pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
+            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save,
+            max_picks=a.max_picks, park_xy=park_xy)
         summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
         print("\n" + json.dumps(summary, indent=2))
         path = C.rel(cfg, f"results/place_test_{stamp}.json")
@@ -511,7 +523,7 @@ def cmd_place_test(cfg, a):
         with open(path, "w") as f:
             json.dump({"settings": vars(a) | {"targets": [t.tolist() for t in targets]},
                        "machine": ms, "results": results, "summary": summary}, f, indent=2, default=str)
-        print("saved", path, f"(up-camera images place_test_{stamp}_up*.png)")
+        print("saved", path, f"(images in {img_dir}/)")
         if a.apply_offset and summary.get("ok", 0) >= 3:
             MS.save(ms_path, down_cam_offset_mm=summary["suggested_down_cam_offset_mm"])
             print("down_cam_offset_mm updated to", summary["suggested_down_cam_offset_mm"])
@@ -553,6 +565,9 @@ def main():
                    help="(up) keep the motion map, only re-centre (e.g. after the nozzle was remounted)")
     p.add_argument("--update-offset", action="store_true",
                    help="(up) also shift down_cam_offset_mm by the change in the centre")
+    p.add_argument("--keep-offset", action="store_true",
+                   help="(up) save the new centre but leave down_cam_offset_mm alone (use when you "
+                        "switch to a different feature, e.g. the real tip instead of the holder face)")
     p = sub.add_parser("calibrate-offset")
     add_dot_args(p)
 
@@ -578,20 +593,19 @@ def main():
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
     p = sub.add_parser("place-test", help="find, pick, inspect, place and measure parts (down-camera coordinates)")
     p.add_argument("--pick", type=float, nargs=2, required=True, metavar=("X", "Y"),
-                   help="down camera roughly over the part to pick (toolhead XY)")
+                   help="down camera over the middle of the pick area (toolhead XY); parts anywhere in view")
     p.add_argument("--target", type=float, nargs=2, required=True, metavar=("X", "Y"),
                    help="first place target, down camera centred on it (toolhead XY)")
     p.add_argument("--step", type=float, nargs=2, default=[4.0, 0.0], metavar=("DX", "DY"),
                    help="target spacing, mm (default 4 0 = along +X)")
-    p.add_argument("--pick-step", type=float, nargs=2, default=[0.0, 0.0], metavar=("DX", "DY"),
-                   help="move the pick spot by this much each cycle (default 0 0 = same spot)")
-    p.add_argument("--n", type=int, default=5, help="cycles (parts)")
+    p.add_argument("--n", type=int, default=5, help="parts to place (= targets)")
+    p.add_argument("--max-picks", type=int, help="stop after this many pick attempts (default: no limit)")
     p.add_argument("--size", type=float, nargs=2, default=[2.0, 1.25], metavar=("L", "W"))
+    p.add_argument("--thickness", type=float, default=0.85, help="part height, mm (for the down-camera scale)")
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
-    p.add_argument("--search", type=float, default=3.0, help="search radius at the pick spot, mm")
     p.add_argument("--pick-z", type=float, default=37.8)
     p.add_argument("--place-z", type=float, default=37.7)
-    p.add_argument("--inspect-z", type=float, default=34.5)
+    p.add_argument("--inspect-z", type=float, help="default: up_cam_focus_z from calibration (else 34.5)")
     p.add_argument("--vac-ms", type=int, default=300, help="wait after VALVE_ON before lifting")
     p.add_argument("--release-ms", type=int, default=500, help="wait after VALVE_OFF before lifting")
     p.add_argument("--accel", type=float, default=2000, help="max accel during the test (0 = leave)")
