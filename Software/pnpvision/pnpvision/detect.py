@@ -69,11 +69,11 @@ class PartMeasure:
 
 
 def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.72,
-                     angles=(-15, -7, 0, 7, 15), quarter_turns=(0, 1, 2, 3), scale=1.0, max_hits=20,
+                     angles=tuple(range(0, 360, 12)), quarter_turns=(0,), scale=1.0, max_hits=20,
                      _cropped=False):
     """Places where `template` (a picture of one part) appears in `img`, best first.
     Returns [(center_px (x, y) in img pixels, score 0..1)]. Normalised correlation on colour,
-    with the template turned by quarter turns and small angles, so parts dropped by hand at
+    with the template turned in 12 degree steps all the way round, so parts dropped by hand at
     any orientation still match; copper pads (one flat colour) don't. scale < 1 searches a
     shrunken copy (fast coarse search); positions are returned in full-size pixels.
     center_px/radius_px: only accept matches within that circle (and only search around it)."""
@@ -131,38 +131,52 @@ def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.
     return hits
 
 
-def find_parts_by_difference(ref, img, expected_px, threshold=None, size_tol=0.45, min_fill=0.6):
-    """Parts that appeared between `ref` (scene without them) and `img`, taken from the SAME
-    camera position. Works for any part colour on any background (pads, silkscreen, tape):
-    only what changed counts. expected_px=(long, short) body size; returns PartMeasure list.
-    Colour difference (largest channel change), so a tan part on green board counts even
-    where the two have similar grey levels."""
-    a = cv2.GaussianBlur(ref, (5, 5), 0).astype(np.int16)
-    b = cv2.GaussianBlur(img, (5, 5), 0).astype(np.int16)
+def find_placed_part(ref, img, center_px, radius_px, expected_px, size_tol=0.4, min_threshold=30):
+    """The part that appeared near center_px between `ref` (target before placing) and `img`
+    (after), both taken from the same commanded camera position. Returns PartMeasure or None.
+
+    Works for any part colour on any background (pads, silkscreen, tape): only what changed
+    counts. Real photos (2026-11-11, part on double-sided tape) needed three things:
+      * line the photos up first: the camera came back ~1 px off, and on the sparkly tape that
+        alone lit up every edge in the difference;
+      * look only in a window around the target;
+      * join the pieces: the metal ends can match the background and drop out of the
+        difference, so the part is the convex hull of the blobs near the biggest one."""
+    ga = cv2.cvtColor(ref, cv2.COLOR_BGR2GRAY) if ref.ndim == 3 else ref
+    gb = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    (sx, sy), _ = cv2.phaseCorrelate(ga.astype(np.float32), gb.astype(np.float32))
+    if abs(sx) > 20 or abs(sy) > 20:                 # not the same view: don't trust the shift
+        sx = sy = 0.0
+    ref = cv2.warpAffine(ref, np.float32([[1, 0, sx], [0, 1, sy]]), (ref.shape[1], ref.shape[0]),
+                         borderMode=cv2.BORDER_REPLICATE)
+    r = int(radius_px)
+    x0, y0 = max(int(center_px[0]) - r, 0), max(int(center_px[1]) - r, 0)
+    x1, y1 = min(int(center_px[0]) + r, img.shape[1]), min(int(center_px[1]) + r, img.shape[0])
+    a = cv2.GaussianBlur(ref[y0:y1, x0:x1], (7, 7), 0).astype(np.int16)
+    b = cv2.GaussianBlur(img[y0:y1, x0:x1], (7, 7), 0).astype(np.int16)
     d = np.abs(b - a)
-    d = d.max(axis=2) if d.ndim == 3 else d
-    d = d.astype(np.uint8)
-    t = threshold if threshold is not None else max(25.0, float(np.median(d)) + 20.0)
-    mask = (d > t).astype(np.uint8) * 255
+    d = (d.max(axis=2) if d.ndim == 3 else d).astype(np.uint8)
+    t, _ = cv2.threshold(d, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    mask = (d > max(t, min_threshold)).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    n, lab, st, cen = cv2.connectedComponentsWithStats(mask)
+    if n < 2:
+        return None
     el, es = expected_px
-    kc = max(3, int(es * 0.3)) | 1                  # close gaps inside the part (e.g. its body
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,  # matching the background's brightness)
-                            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kc, kc)))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    out = []
-    for c in cnts:
-        area = cv2.contourArea(c)
-        (cx, cy), (rw, rh), ang = cv2.minAreaRect(c)
-        if rw < rh:
-            rw, rh, ang = rh, rw, ang + 90.0
-        if rw <= 0 or rh <= 0:
-            continue
-        if abs(rw - el) / el > size_tol or abs(rh - es) / es > size_tol or area / (rw * rh) < min_fill:
-            continue
-        ang = (ang + 90.0) % 180.0 - 90.0
-        out.append(PartMeasure((cx, cy), float(rw), float(rh), float(ang), float(area)))
-    return out
+    big = 1 + int(np.argmax(st[1:, cv2.CC_STAT_AREA]))
+    if st[big, cv2.CC_STAT_AREA] < 0.15 * el * es:
+        return None
+    keep = [i for i in range(1, n) if st[i, cv2.CC_STAT_AREA] > 0.02 * el * es and
+            np.hypot(*(cen[i] - cen[big])) < 0.75 * el]
+    pts = np.vstack([np.column_stack(np.nonzero(lab == i)[::-1]) for i in keep]).astype(np.int32)
+    hull = cv2.convexHull(pts)
+    (cx, cy), (rw, rh), ang = cv2.minAreaRect(hull)
+    if rw < rh:
+        rw, rh, ang = rh, rw, ang + 90.0
+    if abs(rw - el) / el > size_tol or abs(rh - es) / es > size_tol:
+        return None
+    ang = (ang + 90.0) % 180.0 - 90.0
+    return PartMeasure((cx + x0, cy + y0), float(rw), float(rh), float(ang), float(cv2.contourArea(hull)))
 
 
 def measure_part(img, nozzle_px, search_radius_px, min_area_px=200, expected_px=None):

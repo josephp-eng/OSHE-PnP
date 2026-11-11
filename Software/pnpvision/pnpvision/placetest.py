@@ -21,7 +21,7 @@ Hardware is injected (callables), so the whole cycle runs against a simulator in
 """
 import numpy as np
 
-from .detect import find_by_template, find_parts_by_difference, measure_part
+from .detect import find_by_template, find_placed_part, measure_part
 
 
 def _mean_frame(grab, n=2):
@@ -174,14 +174,13 @@ def place_test(mr, down_grab, down_motion, down_principal, up_inspect, ms, next_
         after = look(target)
         save(f"target{t_idx}_empty", ref_t)
         save(f"target{t_idx}_after", after)
-        found = [c for c in find_parts_by_difference(ref_t, after, exp_px)
-                 if np.hypot(*(np.asarray(c.center_px) - down_principal)) * mpp < 2.0]
-        if not found:
+        found = find_placed_part(ref_t, after, down_principal, 2.5 / mpp,
+                                 tuple(v * k_height for v in exp_px))
+        if found is None:
             rec["status"] = "placed part not found at the target (still on the nozzle?)"
             say("  NOT found at the target after placing - check the nozzle and the tape.")
             continue
-        found.sort(key=lambda c: np.hypot(*(np.asarray(c.center_px) - down_principal)))
-        landed = target + down_motion.offset_mm(np.asarray(found[0].center_px) - down_principal) / k_height
+        landed = target + down_motion.offset_mm(np.asarray(found.center_px) - down_principal) / k_height
         e = landed - target
         job = e if correct else e - u
         rec.update(status="ok", landed=landed.tolist(), error_mm=e.tolist(), job_error_mm=job.tolist())

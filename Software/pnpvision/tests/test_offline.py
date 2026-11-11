@@ -288,3 +288,23 @@ if __name__ == "__main__":
     for n, f in list(globals().items()):
         if n.startswith("test_"):
             f(); print("PASS", n)
+
+
+def test_placed_part_found_on_real_tape_photos():
+    # Crops of the down camera at two targets on double-sided tape (2026-11-11), before and
+    # after an 0805 was placed. The old finder missed both: the camera came back ~1 px off and
+    # the part's metal ends vanished in the difference. Centre and size checked by eye.
+    from pnpvision.detect import find_placed_part
+    d = os.path.join(os.path.dirname(__file__), "data")
+    mpp, k = 1 / 58.7, 11.5 / (11.5 - 0.85)
+    exp = (2.0 * k / mpp, 1.25 * k / mpp)
+    for t, want in ((1, (7.5, 4.2)), (2, (1.3, 3.4))):
+        a = cv2.imread(os.path.join(d, f"landing_t{t}_empty.jpg"))
+        b = cv2.imread(os.path.join(d, f"landing_t{t}_after.jpg"))
+        c = (199.6, 199.9)
+        pm = find_placed_part(a, b, c, 2.5 / mpp, exp)
+        assert pm is not None, t
+        off = np.subtract(pm.center_px, c)
+        assert np.linalg.norm(off - want) < 3.0, (t, off)          # within 0.05 mm
+        assert 1.9 < pm.long_px * mpp < 2.3 and 1.25 < pm.short_px * mpp < 1.6, (t, pm)
+        assert find_placed_part(a, a, c, 2.5 / mpp, exp) is None   # nothing placed -> nothing found
