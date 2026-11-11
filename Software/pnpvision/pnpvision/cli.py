@@ -450,6 +450,81 @@ def cmd_inspect_up(cfg, a):
         cam.stop()
 
 
+def cmd_place_test(cfg, a):
+    """Find -> pick -> up-camera inspect -> place -> measure, a.n times with a pause between."""
+    from .placetest import place_test, summarize
+    mr = make_mr(cfg)
+    ms_path = C.rel(cfg, "calibration/machine.json")
+    ms = MS.load(ms_path)
+    if not any(ms["up_cam_xy_mm"]) or not any(ms["down_cam_offset_mm"]):
+        raise SystemExit("up camera centre / down-camera offset not calibrated yet")
+    for name, z in (("pick", a.pick_z), ("place", a.place_z), ("inspect", a.inspect_z)):
+        if not (mr.safe_travel_z < z <= 40.0):
+            raise SystemExit(f"--{name}-z {z} looks wrong (expected between Z{mr.safe_travel_z} and Z40)")
+    step = np.array(a.step, float)
+    targets = [np.array(a.target, float) + i * step for i in range(a.n)]
+    lo, hi = np.min(targets, 0), np.max(targets, 0)
+    print(f"pick spot (down camera) ~{a.pick}, search radius {a.search} mm, part {a.size[0]}x{a.size[1]} mm")
+    print(f"{a.n} targets from {np.round(targets[0], 3).tolist()} every {a.step} mm "
+          f"(last {np.round(targets[-1], 3).tolist()}); box X {lo[0]:.2f}..{hi[0]:.2f} Y {lo[1]:.2f}..{hi[1]:.2f}")
+    print(f"pick Z{a.pick_z}, place Z{a.place_z}, inspect Z{a.inspect_z}; up-camera correction "
+          f"{'ON' if a.correct else 'OFF'}; accel {a.accel} mm/s^2; down_cam_offset {ms['down_cam_offset_mm']}")
+    print("Visual home (VISION_HOME) must have been done since the last re-home, and the up light left on.")
+    if input("Start? [y/N] ").strip().lower() != "y":
+        return
+    old_accel = mr.status("toolhead").get("max_accel")
+    down_cam, down_lens = open_cam(cfg, "down")
+    up_cam, up_lens = open_cam(cfg, "up")
+    lc = cfg["lighting"]["up"]
+    settle = cfg["moonraker"]["settle_s"]
+    try:
+        if a.accel:
+            mr.gcode(f"SET_VELOCITY_LIMIT ACCEL={a.accel}")
+        down_motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"]))
+        up_motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["up"]["motion_map"]))
+        up = UpCam(up_cam, up_lens, make_light(lc, mr), up_motion, settle_s=lc["settle_s"],
+                   ambient_subtract=lc["ambient_subtract"], keep_on=True,
+                   search_radius_mm=lc["search_radius_mm"])
+        log = EventLog(C.rel(cfg, cfg["log"]["db"]))
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        shots = [0]
+
+        def up_inspect(size):
+            img = up.frame()
+            shots[0] += 1
+            cv2.imwrite(f"place_test_{stamp}_up{shots[0]}.png", img)
+            return up.inspect(tuple(size), a.tol, log, img=img)
+
+        results = place_test(
+            mr, lambda: down_lens.undistort(down_cam.fresh(settle_s=settle)), down_motion,
+            np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]]), up_inspect, ms,
+            np.array(a.pick, float), targets, size_mm=tuple(a.size), search_mm=a.search,
+            pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
+            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct)
+        summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
+        print("\n" + json.dumps(summary, indent=2))
+        path = C.rel(cfg, f"results/place_test_{stamp}.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"settings": vars(a) | {"targets": [t.tolist() for t in targets]},
+                       "machine": ms, "results": results, "summary": summary}, f, indent=2, default=str)
+        print("saved", path, f"(up-camera images place_test_{stamp}_up*.png)")
+        if a.apply_offset and summary.get("ok", 0) >= 3:
+            MS.save(ms_path, down_cam_offset_mm=summary["suggested_down_cam_offset_mm"])
+            print("down_cam_offset_mm updated to", summary["suggested_down_cam_offset_mm"])
+        elif a.apply_offset:
+            print("not applying the offset: need at least 3 good cycles")
+    finally:
+        try:
+            mr.move_abs(z=mr.safe_travel_z, feedrate=600)
+        except Exception as e:
+            print("could not lift the nozzle:", e)
+        if a.accel and old_accel:
+            mr.gcode(f"SET_VELOCITY_LIMIT ACCEL={old_accel}")
+        down_cam.stop()
+        up_cam.stop()
+
+
 def main():
     ap = argparse.ArgumentParser(prog="pnpvision")
     ap.add_argument("--config", default="config.toml")
@@ -498,12 +573,32 @@ def main():
     p = sub.add_parser("inspect-up")
     p.add_argument("--size", type=float, nargs=2, metavar=("L", "W"), help="expected part body, mm")
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
+    p = sub.add_parser("place-test", help="find, pick, inspect, place and measure parts (down-camera coordinates)")
+    p.add_argument("--pick", type=float, nargs=2, required=True, metavar=("X", "Y"),
+                   help="down camera roughly over the part to pick (toolhead XY)")
+    p.add_argument("--target", type=float, nargs=2, required=True, metavar=("X", "Y"),
+                   help="first place target, down camera centred on it (toolhead XY)")
+    p.add_argument("--step", type=float, nargs=2, default=[4.0, 0.0], metavar=("DX", "DY"),
+                   help="target spacing, mm (default 4 0 = along +X)")
+    p.add_argument("--n", type=int, default=5, help="cycles (parts)")
+    p.add_argument("--size", type=float, nargs=2, default=[2.0, 1.25], metavar=("L", "W"))
+    p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
+    p.add_argument("--search", type=float, default=3.0, help="search radius at the pick spot, mm")
+    p.add_argument("--pick-z", type=float, default=37.8)
+    p.add_argument("--place-z", type=float, default=37.7)
+    p.add_argument("--inspect-z", type=float, default=34.5)
+    p.add_argument("--vac-ms", type=int, default=300, help="wait after VALVE_ON before lifting")
+    p.add_argument("--release-ms", type=int, default=500, help="wait after VALVE_OFF before lifting")
+    p.add_argument("--accel", type=float, default=2000, help="max accel during the test (0 = leave)")
+    p.add_argument("--correct", action="store_true", help="apply the up-camera offset when placing")
+    p.add_argument("--apply-offset", action="store_true",
+                   help="save the suggested down_cam_offset_mm (needs >= 3 good cycles)")
     p = sub.add_parser("datum")
     p.add_argument("--teach", action="store_true"); p.add_argument("--reference", action="store_true")
 
     a = ap.parse_args()
     cfg = C.load(a.config)
-    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep,
+    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep, "place-test": cmd_place_test,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)
