@@ -454,8 +454,9 @@ def cmd_inspect_up(cfg, a):
 
 
 def cmd_place_test(cfg, a):
-    """Pick parts from an area seen by the down camera, inspect, place on a row of targets, measure."""
-    from .placetest import place_test, summarize
+    """You centre the down camera on the first part; it picks, inspects, places on the next
+    target and measures, then finds the next part itself (looks like the first one)."""
+    from .placetest import PartFinder, place_test, summarize
     mr = make_mr(cfg)
     ms_path = C.rel(cfg, "calibration/machine.json")
     ms = MS.load(ms_path)
@@ -470,9 +471,10 @@ def cmd_place_test(cfg, a):
     targets = [np.array(a.target, float) + i * step for i in range(a.n)]
     lo, hi = np.min(targets, 0), np.max(targets, 0)
     wd = cfg["cameras"]["down"].get("working_distance_mm", 11.5)
-    # park the head toward the back while you place parts (toolhead Y + 40, inside the limits)
-    park_xy = np.array([a.pick[0], min(a.pick[1] + 40.0, mr.limits["y"][1] - 5.0)])
-    print(f"pick area: whatever the down camera sees from {a.pick} (about 32 x 18 mm); "
+    x0, y0, _ = mr.position()
+    first = np.array([x0, y0])
+    print(f"first part: the one under the down camera now, at {np.round(first, 3).tolist()}; the rest "
+          f"are found automatically within the camera view from there (about +-12 mm X, +-6 mm Y); "
           f"part {a.size[0]}x{a.size[1]}x{a.thickness} mm")
     print(f"{a.n} targets from {np.round(targets[0], 3).tolist()} every {a.step} mm "
           f"(last {np.round(targets[-1], 3).tolist()}); box X {lo[0]:.2f}..{hi[0]:.2f} Y {lo[1]:.2f}..{hi[1]:.2f}")
@@ -509,13 +511,17 @@ def cmd_place_test(cfg, a):
             save(f"up{shots[0]}", img)
             return up.inspect(tuple(size), a.tol, log, img=img)
 
+        down_grab = lambda: down_lens.undistort(down_cam.fresh(settle_s=settle))
+        principal = np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]])
+        k_height = wd / (wd - a.thickness)
+        finder = PartFinder(mr, down_grab, down_motion, principal, tuple(a.size), k_height, first,
+                            avoid=targets)
+        save("first_part_template", finder.template)
         results = place_test(
-            mr, lambda: down_lens.undistort(down_cam.fresh(settle_s=settle)), down_motion,
-            np.array([down_lens.newK[0, 2], down_lens.newK[1, 2]]), up_inspect, ms,
-            np.array(a.pick, float), targets, size_mm=tuple(a.size), thickness_mm=a.thickness,
-            working_distance_mm=wd, pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
-            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save,
-            max_picks=a.max_picks, park_xy=park_xy)
+            mr, down_grab, down_motion, principal, up_inspect, ms, finder, targets,
+            size_mm=tuple(a.size), thickness_mm=a.thickness, working_distance_mm=wd,
+            pick_z=a.pick_z, place_z=a.place_z, inspect_z=a.inspect_z,
+            vac_ms=a.vac_ms, release_ms=a.release_ms, correct=a.correct, save=save)
         summary = summarize(results, ms["down_cam_offset_mm"], a.correct)
         print("\n" + json.dumps(summary, indent=2))
         path = C.rel(cfg, f"results/place_test_{stamp}.json")
@@ -591,15 +597,13 @@ def main():
     p = sub.add_parser("inspect-up")
     p.add_argument("--size", type=float, nargs=2, metavar=("L", "W"), help="expected part body, mm")
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")
-    p = sub.add_parser("place-test", help="find, pick, inspect, place and measure parts (down-camera coordinates)")
-    p.add_argument("--pick", type=float, nargs=2, required=True, metavar=("X", "Y"),
-                   help="down camera over the middle of the pick area (toolhead XY); parts anywhere in view")
+    p = sub.add_parser("place-test", help="centre the down camera on a part first; then pick, inspect, "
+                                          "place, measure, and find the next parts automatically")
     p.add_argument("--target", type=float, nargs=2, required=True, metavar=("X", "Y"),
                    help="first place target, down camera centred on it (toolhead XY)")
     p.add_argument("--step", type=float, nargs=2, default=[4.0, 0.0], metavar=("DX", "DY"),
                    help="target spacing, mm (default 4 0 = along +X)")
     p.add_argument("--n", type=int, default=5, help="parts to place (= targets)")
-    p.add_argument("--max-picks", type=int, help="stop after this many pick attempts (default: no limit)")
     p.add_argument("--size", type=float, nargs=2, default=[2.0, 1.25], metavar=("L", "W"))
     p.add_argument("--thickness", type=float, default=0.85, help="part height, mm (for the down-camera scale)")
     p.add_argument("--tol", type=float, default=0.3, help="allowed size error per side, mm")

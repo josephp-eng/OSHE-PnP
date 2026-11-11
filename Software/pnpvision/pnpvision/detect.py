@@ -68,6 +68,69 @@ class PartMeasure:
     area_px: float
 
 
+def find_by_template(img, template, center_px=None, radius_px=None, threshold=0.72,
+                     angles=(-15, -7, 0, 7, 15), quarter_turns=(0, 1, 2, 3), scale=1.0, max_hits=20,
+                     _cropped=False):
+    """Places where `template` (a picture of one part) appears in `img`, best first.
+    Returns [(center_px (x, y) in img pixels, score 0..1)]. Normalised correlation on colour,
+    with the template turned by quarter turns and small angles, so parts dropped by hand at
+    any orientation still match; copper pads (one flat colour) don't. scale < 1 searches a
+    shrunken copy (fast coarse search); positions are returned in full-size pixels.
+    center_px/radius_px: only accept matches within that circle (and only search around it)."""
+    if center_px is not None and radius_px is not None and not _cropped:
+        # search only a window around the circle: much faster on the Pi than the whole frame
+        m = int(radius_px + max(template.shape[:2]) * 0.75) + 2
+        x0 = max(int(center_px[0]) - m, 0)
+        y0 = max(int(center_px[1]) - m, 0)
+        win = img[y0:int(center_px[1]) + m, x0:int(center_px[0]) + m]
+        hits = find_by_template(win, template, (center_px[0] - x0, center_px[1] - y0), radius_px,
+                                threshold, angles, quarter_turns, scale, max_hits, _cropped=True)
+        return [((p[0] + x0, p[1] + y0), s) for p, s in hits]
+    small = img if scale == 1.0 else cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    tpl0 = template if scale == 1.0 else cv2.resize(template, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    best = None
+    for q in quarter_turns:
+        tq = np.ascontiguousarray(np.rot90(tpl0, q))
+        h, w = tq.shape[:2]
+        for ang in angles:
+            if ang:
+                m = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
+                t = cv2.warpAffine(tq, m, (w, h), borderMode=cv2.BORDER_REPLICATE)
+            else:
+                t = tq
+            if small.shape[0] < h or small.shape[1] < w:
+                continue
+            r = cv2.matchTemplate(small, t, cv2.TM_CCOEFF_NORMED)
+            pad = np.full((small.shape[0], small.shape[1]), -1.0, np.float32)
+            pad[h // 2:h // 2 + r.shape[0], w // 2:w // 2 + r.shape[1]] = r   # index = template centre
+            best = pad if best is None else np.maximum(best, pad)
+    if best is None:
+        return []
+    if center_px is not None and radius_px is not None:
+        yy, xx = np.mgrid[0:best.shape[0], 0:best.shape[1]]
+        cx, cy = center_px[0] * scale, center_px[1] * scale
+        best[(xx - cx) ** 2 + (yy - cy) ** 2 > (radius_px * scale) ** 2] = -1.0
+    sep = max(template.shape[:2]) * scale * 0.8          # one hit per part
+    hits = []
+    for _ in range(max_hits):
+        _, score, _, (x, y) = cv2.minMaxLoc(best)
+        if score < threshold:
+            break
+        # sub-pixel peak (parabola through the neighbours)
+        dx = dy = 0.0
+        if 0 < x < best.shape[1] - 1:
+            l, c, rr = best[y, x - 1], best[y, x], best[y, x + 1]
+            den = l - 2 * c + rr
+            dx = 0.5 * (l - rr) / den if den < 0 else 0.0
+        if 0 < y < best.shape[0] - 1:
+            u, c, d = best[y - 1, x], best[y, x], best[y + 1, x]
+            den = u - 2 * c + d
+            dy = 0.5 * (u - d) / den if den < 0 else 0.0
+        hits.append((((x + dx) / scale, (y + dy) / scale), float(score)))
+        cv2.circle(best, (x, y), int(sep), -1.0, -1)
+    return hits
+
+
 def find_parts_by_difference(ref, img, expected_px, threshold=None, size_tol=0.45, min_fill=0.6):
     """Parts that appeared between `ref` (scene without them) and `img`, taken from the SAME
     camera position. Works for any part colour on any background (pads, silkscreen, tape):
