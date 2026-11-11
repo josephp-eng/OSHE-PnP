@@ -19,6 +19,9 @@ import time
 
 import cv2
 
+# Wait after switching a light ON before the frame that counts (camera auto-exposure).
+SWITCH_ON_SETTLE_S = 1.0
+
 
 class Light:
     is_on = False
@@ -124,9 +127,12 @@ def grab_lit(cam, light, lens=None, settle_s=0.2, subtract_ambient=False, keep_o
             if light.is_on:
                 light.off()
             dark = cam.fresh(settle_s=settle_s)
-        if not light.is_on:
+        switched = not light.is_on
+        if switched:
             light.on()
-        lit = cam.fresh(settle_s=settle_s)
+        # A light that was just switched on needs the camera's auto-exposure to catch up
+        # (0.2 s gave a blown-out frame); one that was already on only needs a fresh frame.
+        lit = cam.fresh(settle_s=max(settle_s, SWITCH_ON_SETTLE_S) if switched else settle_s)
     finally:
         if not keep_on:
             light.off()

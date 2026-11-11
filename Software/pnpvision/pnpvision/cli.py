@@ -111,6 +111,40 @@ def cmd_find_dot(cfg, a):
     print("wrote", a.out, "(red = the one commands would use)")
 
 
+def cmd_focus_sweep(cfg, a):
+    """Up camera: step the nozzle in Z (no X/Y moves) and score sharpness around the nozzle axis."""
+    mr = make_mr(cfg)
+    ms = MS.load(C.rel(cfg, "calibration/machine.json"))
+    x, y, z_start = mr.position()
+    if np.linalg.norm(np.subtract([x, y], ms["up_cam_xy_mm"])) > 3.0:
+        raise SystemExit(f"move the nozzle over the up camera first (stored centre {ms['up_cam_xy_mm']})")
+    if max(a.z0, a.z1) > 40.0:
+        raise SystemExit("refusing Z > 40 over the up camera (plate ~Z50, lens just under it)")
+    lc = cfg["lighting"]["up"]
+    light = make_light(lc, mr)
+    cam, lens = open_cam(cfg, "up")
+    motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["up"]["motion_map"]))
+    cx, cy = lens.newK[0, 2], lens.newK[1, 2]
+    r = int(a.radius / motion.mm_per_px)
+    rows = []
+    try:
+        n = int(round(abs(a.z1 - a.z0) / a.step)) + 1
+        for z in np.linspace(a.z0, a.z1, n):
+            mr.move_abs(z=float(z), feedrate=300)
+            img = grab_lit(cam, light, lens, lc["settle_s"], keep_on=True)
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            crop = g[max(int(cy) - r, 0):int(cy) + r, max(int(cx) - r, 0):int(cx) + r]
+            sharp = float(cv2.Laplacian(crop, cv2.CV_64F).var())
+            rows.append((float(z), sharp, float(crop.mean()), float((crop >= 250).mean() * 100)))
+            print(f"Z{z:7.2f}  sharpness {sharp:9.1f}  mean {rows[-1][2]:5.1f}  saturated {rows[-1][3]:4.1f}%")
+            cv2.imwrite(f"focus_z{z:.2f}.png", img)
+    finally:
+        cam.stop()
+        mr.move_abs(z=min(z_start, a.z0, a.z1), feedrate=300)   # end at the highest of the Zs used
+    best = max(rows, key=lambda t: t[1])
+    print(f"sharpest at Z{best[0]:.2f} (images focus_z*.png). Nozzle left at Z{min(z_start, a.z0, a.z1):.2f}")
+
+
 def cmd_calibrate_motion(cfg, a):
     mr = make_mr(cfg)
     cam, lens = open_cam(cfg, a.cam)
@@ -427,6 +461,11 @@ def main():
     p.add_argument("--cam", required=True, choices=["up", "down"])
     p.add_argument("--out", default="find_dot.png")
     add_dot_args(p)
+    p = sub.add_parser("focus-sweep", help="up cam: step Z over the camera, score sharpness")
+    p.add_argument("--z0", type=float, required=True, help="first Z (smaller = higher)")
+    p.add_argument("--z1", type=float, required=True, help="last Z (max 40)")
+    p.add_argument("--step", type=float, default=0.5)
+    p.add_argument("--radius", type=float, default=2.0, help="scored area around the nozzle axis, mm")
     p = sub.add_parser("calibrate-motion")
     p.add_argument("--cam", required=True, choices=["up", "down"])
     p.add_argument("--step", type=float, default=1.0, help="jog size, mm")
@@ -464,7 +503,7 @@ def main():
 
     a = ap.parse_args()
     cfg = C.load(a.config)
-    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot,
+    {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)

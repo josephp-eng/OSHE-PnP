@@ -53,7 +53,7 @@ name = "up_light"               # [neopixel up_light] in printer.cfg: 6 x WS2812
 level = 1.0                     # 0..1 (PWM); use 1.0 for plain on/off pins
 settle_s = 0.20                 # wait after switching, before the frame that counts
 ambient_subtract = false        # also grab a light-off frame and subtract it
-keep_on = false                 # true = never switch (saves ~settle_s per inspection)
+keep_on = true                  # true = leave it on: switching makes the camera re-adjust exposure
 search_radius_mm = 6.0          # how far from the nozzle axis to look for the part
 
 [rotation]
