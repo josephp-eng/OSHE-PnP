@@ -105,3 +105,18 @@ up_cam_insert = [3, 1]                     # camera centre where insert (3,1) wo
 reject_bin_height_mm = 15.0
 datum_height_mm = 11.0
 clamp_height_mm = 10.0
+
+[feeders]
+# Feeder Nano (Software/feeder_nano/feeder_nano.ino) on USB. Prefer the stable /dev/serial/by-id/...
+# name (`ls /dev/serial/by-id/` on the Pi once it's plugged in) over /dev/ttyUSB0.
+port = "/dev/ttyUSB0"
+baud = 115200
+timeout_s = 8.0                 # a stroke takes ~1.5-2 s
+file = "calibration/feeders.json"   # written by teach-feeder
+
+# [packages."<KiCad footprint>"] overrides/additions to pnpvision/parts.py DEFAULT_PACKAGES, e.g.
+# [packages."C_0805_2012Metric"]
+# body_mm = [2.0, 1.25]
+# axis_deg = 0.0
+# symmetric = true
+# tip = "N14"

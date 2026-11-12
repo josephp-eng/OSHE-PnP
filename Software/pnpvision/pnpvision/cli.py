@@ -633,6 +633,204 @@ def cmd_align_board(cfg, a):
         cam.stop()
 
 
+def _feeder_bus(cfg, sim=False):
+    from .feeders import SerialFeederBus, SimFeederBus
+    if sim:
+        return SimFeederBus()
+    fc = cfg.get("feeders", {})
+    return SerialFeederBus(fc.get("port", "/dev/ttyUSB0"), fc.get("baud", 115200),
+                           fc.get("timeout_s", 8.0))
+
+
+def _feeders_path(cfg):
+    return C.rel(cfg, cfg.get("feeders", {}).get("file", "calibration/feeders.json"))
+
+
+def cmd_tip(cfg, a):
+    """Record a nozzle tip's measured heights and/or declare which tip is on the nozzle now."""
+    path = C.rel(cfg, "calibration/machine.json")
+    ms = MS.load(path)
+    tips = dict(ms.get("tips") or {})
+    t = dict(tips.get(a.name, {}))
+    if a.board_touch_z is not None:
+        t["board_touch_z"] = a.board_touch_z
+    if a.inspect_z is not None:
+        t["inspect_z"] = a.inspect_z
+    tips[a.name] = t
+    upd = {"tips": tips}
+    if a.current:
+        upd["current_tip"] = a.name
+    MS.save(path, **upd)
+    print(f"tip {a.name}: {t}" + ("  (now the current tip)" if a.current else ""))
+
+
+def cmd_teach_feeder(cfg, a):
+    """Nozzle lowered by eye onto the part in the pocket: save that XY and Z as the feeder's pick."""
+    from .feeders import FeederBank, Feeder
+    mr = make_mr(cfg)
+    x, y, z = mr.position()
+    ms = MS.load(C.rel(cfg, "calibration/machine.json"))
+    path = _feeders_path(cfg)
+    bank = FeederBank.load(path)
+    d = {"id": a.id, "kind": "manual" if a.manual else "servo", "xy": [x, y], "part_top_z": z,
+         "teach_tip": ms.get("current_tip"), "package": a.package, "value": a.value or "",
+         "learned_xy": [0.0, 0.0]}
+    if not a.manual:
+        if a.servo is None:
+            raise SystemExit("give --servo N (or --manual)")
+        d["servo"] = a.servo
+    if a.tape_angle is not None:
+        d["tape_angle_deg"] = a.tape_angle
+    old = bank.get(a.id)
+    if old is not None:
+        bank.feeders.remove(old)
+    bank.feeders.append(Feeder(d))
+    bank.feeders.sort(key=lambda fd: fd.d["xy"][0])
+    bank.save(path)
+    print(f"feeder {a.id}: pick at X{x:.3f} Y{y:.3f}, part top Z{z:.3f} (tip {d['teach_tip']}), {d}")
+    for w in bank.check_spacing():
+        print("  check:", w)
+
+
+def cmd_teach_bin(cfg, a):
+    mr = make_mr(cfg)
+    x, y, _ = mr.position()
+    MS.save(C.rel(cfg, "calibration/machine.json"), reject_bin_xy=[x, y])
+    print(f"reject bin at X{x:.3f} Y{y:.3f} (parts are dropped from Z{mr.safe_travel_z})")
+
+
+def cmd_feed(cfg, a):
+    bus = _feeder_bus(cfg)
+    try:
+        for i in range(a.times):
+            t0 = time.time()
+            bus.feed(a.servo)
+            bus.wait(a.servo)
+            print(f"feed {i + 1}/{a.times} on servo {a.servo}: done in {time.time() - t0:.2f} s")
+    finally:
+        bus.close()
+
+
+def cmd_run_job(cfg, a):
+    from .board import BoardPose
+    from .feeders import FeederBank
+    from .runner import JobError, dry_run, plan_job, run_job
+    with open(a.job, encoding="utf-8") as f:
+        job = json.load(f)
+    if job.get("format") != "oshe-pnp-job/1":
+        raise SystemExit(f"{a.job}: not an oshe-pnp-job/1 file")
+    ms_path = C.rel(cfg, "calibration/machine.json")
+    ms = MS.load(ms_path)
+    bp = ms.get("board_pose")
+    if not bp:
+        raise SystemExit("no board pose: run align-board first")
+    if bp.get("job_board") != job["board"]["name"]:
+        print(f"WARNING: the saved board pose is for '{bp.get('job_board')}', this job is '{job['board']['name']}'")
+    pose = BoardPose.from_dict(bp["pose"])
+    packages = cfg.get("packages", {})
+    only = set(a.only) if a.only else None
+    mr = make_mr(cfg)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    img_dir = f"job_{stamp}"
+    os.makedirs(img_dir, exist_ok=True)
+    if a.dry_run:
+        cam, lens = open_cam(cfg, "down")
+        principal = (int(lens.newK[0, 2]), int(lens.newK[1, 2]))
+        try:
+            def look(xy, name):
+                mr.move_abs(x=float(xy[0]), y=float(xy[1]))
+                img = lens.undistort(cam.fresh(settle_s=cfg["moonraker"]["settle_s"]))
+                cv2.drawMarker(img, principal, (0, 255, 255), cv2.MARKER_CROSS, 80, 2)
+                cv2.imwrite(os.path.join(img_dir, name + ".png"), img)
+            dry_run(job, pose, look, packages, only)
+        finally:
+            cam.stop()
+        print(f"dry run done; photos (crosshair = where each part's centre goes) in {img_dir}/")
+        return
+    tips = ms.get("tips") or {}
+    bus = _feeder_bus(cfg, sim=a.no_feeders)
+    bank = FeederBank.load(_feeders_path(cfg), bus)
+    for fd in bank.feeders:
+        fd.by_hand = a.no_feeders
+    steps, problems = plan_job(job, bank, tips, packages, only)
+    print(f"job '{job['board']['name']}': {len(steps)} placements; tips in order: "
+          f"{list(dict.fromkeys(s['tip'] for s in steps))}; feeders: "
+          f"{sorted({s['feeder'].id for s in steps if s['feeder']})}")
+    if problems:
+        bus.close()
+        raise SystemExit("job can't run:\n  " + "\n  ".join(problems))
+    print("Before starting: VISION_HOME done, align-board done for this board, UP_LIGHT_ON, "
+          "feeders loaded with a part in each pick pocket.")
+    if input("Start? [y/N] ").strip().lower() != "y":
+        bus.close()
+        return
+    log_db = EventLog(C.rel(cfg, cfg["log"]["db"]))
+    log = lambda event, ok=None, **d: log_db.log(event, ok=ok, **d)
+    up_cam, up_lens = open_cam(cfg, "up")
+    lc = cfg["lighting"]["up"]
+    try:
+        up_motion = MotionMap.load(C.rel(cfg, cfg["cameras"]["up"]["motion_map"]))
+        up = UpCam(up_cam, up_lens, make_light(lc, mr), up_motion, settle_s=lc["settle_s"],
+                   ambient_subtract=lc["ambient_subtract"], keep_on=True,
+                   search_radius_mm=lc["search_radius_mm"])
+        shots = [0]
+
+        def up_inspect(body):
+            img = up.frame()
+            shots[0] += 1
+            cv2.imwrite(os.path.join(img_dir, f"up{shots[0]:04d}.png"), img)
+            tol = 0.3
+            return up.inspect(tuple(body) if body else None, tol, log_db, img=img)
+
+        def recentre(tip):
+            """New tip: find its bore over the up camera, move the stored centre and the
+            down-camera offset by the same shift (like calibrate-motion --center-only --update-offset)."""
+            from .servo import center_on
+            t = tips[tip]
+            bore = t.get("bore", {})
+            locate = partial(find_circle, r_min_px=bore.get("rmin", 8), r_max_px=bore.get("rmax", 30),
+                             polarity=bore.get("polarity", "dark"), threshold=bore.get("thresh", 40))
+            old = np.asarray(ms["up_cam_xy_mm"], float)
+            mr.move_abs(x=float(old[0]), y=float(old[1]))
+            mr.move_abs(z=t["inspect_z"], feedrate=300)
+            grab = lambda: up_lens.undistort(up_cam.fresh(settle_s=cfg["moonraker"]["settle_s"]))
+            res = center_on(grab, locate, lambda dx, dy: mr.move_rel(dx, dy, stay_low=True), up_motion,
+                            (up_lens.newK[0, 2], up_lens.newK[1, 2]), max_step_mm=mr.MAX_LOW_XY_MM * 0.8)
+            mr.move_abs(z=mr.safe_travel_z, feedrate=600)
+            if not res["converged"]:
+                raise SystemExit(f"could not find tip {tip}'s bore over the up camera ({res}); set "
+                                 f"tips.{tip}.bore detector settings in machine.json (rmin/rmax/thresh)")
+            x, y, _ = mr.position()
+            d = np.array([x, y]) - old
+            ms["up_cam_xy_mm"] = [x, y]
+            ms["down_cam_offset_mm"] = (np.asarray(ms["down_cam_offset_mm"], float) + d).tolist()
+            MS.save(ms_path, up_cam_xy_mm=ms["up_cam_xy_mm"], down_cam_offset_mm=ms["down_cam_offset_mm"],
+                    current_tip=tip)
+            return f"shift {np.round(d, 3).tolist()} mm"
+
+        rot = Rotator.from_config(mr.gcode, cfg["rotation"])
+        results = run_job(job, pose, ms, mr, up_inspect, rot, bank, tips, packages, only,
+                          current_tip=a.tip or ms.get("current_tip"),
+                          recentre=None if a.no_recentre else recentre,
+                          reject_xy=ms.get("reject_bin_xy"), log=log, retries=a.retries,
+                          verify_empty=not a.no_verify)
+    except JobError as e:
+        raise SystemExit(str(e))
+    finally:
+        try:
+            mr.move_abs(z=mr.safe_travel_z, feedrate=600)
+        except Exception as e:
+            print("could not lift the nozzle:", e)
+        up_cam.stop()
+        bank.save(_feeders_path(cfg))          # keeps what the feeders learned
+        bus.close()
+    path = C.rel(cfg, f"results/job_{stamp}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump({"job": os.path.abspath(a.job), "pose": bp, "results": results}, f, indent=2, default=str)
+    print("saved", path, f"(up-camera images in {img_dir}/)")
+
+
 def cmd_set_offset(cfg, a):
     """Write down_cam_offset_mm directly (e.g. the average job error of several place-tests)."""
     path = C.rel(cfg, "calibration/machine.json")
@@ -729,6 +927,34 @@ def main():
     p.add_argument("--min-score", type=float, default=0.5, help="pad template match threshold")
     p.add_argument("--show", nargs="*", help="placements (refs) to photograph afterwards "
                    "(default: the parts that own the alignment pads)")
+    p = sub.add_parser("run-job", help="place a job on the aligned board from the feeders "
+                       "(align-board first; --dry-run = camera tour, no parts)")
+    p.add_argument("job")
+    p.add_argument("--dry-run", action="store_true", help="no parts: photograph every placement spot")
+    p.add_argument("--only", nargs="+", metavar="REF", help="place only these parts")
+    p.add_argument("--tip", help="tip on the nozzle now (default: current_tip in machine.json)")
+    p.add_argument("--retries", type=int, default=3, help="picks per part before asking you")
+    p.add_argument("--no-verify", action="store_true", help="skip the empty-nozzle check after placing")
+    p.add_argument("--no-recentre", action="store_true", help="don't re-centre after a tip change")
+    p.add_argument("--no-feeders", action="store_true",
+                   help="no feeder Nano: servo feeders don't stroke (load parts by hand)")
+    p = sub.add_parser("tip", help="record a nozzle tip's heights and/or make it the current tip")
+    p.add_argument("name", help="e.g. N14")
+    p.add_argument("--board-touch-z", type=float, help="Z where this tip touches the bare board top")
+    p.add_argument("--inspect-z", type=float, help="Z with a part on this tip in focus over the up camera")
+    p.add_argument("--current", action="store_true", help="this tip is on the nozzle now")
+    p = sub.add_parser("teach-feeder", help="nozzle lowered onto the part in the pocket: save the pick spot")
+    p.add_argument("id", help="e.g. F1")
+    p.add_argument("--servo", type=int, help="servo number on the feeder Nano")
+    p.add_argument("--manual", action="store_true", help="manual track (no servo)")
+    p.add_argument("--package", required=True, help="KiCad footprint name, as in the job")
+    p.add_argument("--value", help="only parts with this value (default: any)")
+    p.add_argument("--tape-angle", type=float,
+                   help="machine angle of the part's rot-0 orientation in the pocket (parts with a pin 1)")
+    p = sub.add_parser("teach-bin", help="nozzle over the reject bin: save it")
+    p = sub.add_parser("feed", help="stroke a servo feeder (tests the Nano)")
+    p.add_argument("servo", type=int)
+    p.add_argument("--times", type=int, default=1)
     p = sub.add_parser("set-offset", help="set the down-camera-to-nozzle offset (mm) directly")
     p.add_argument("x", type=float)
     p.add_argument("y", type=float)
@@ -738,7 +964,8 @@ def main():
     a = ap.parse_args()
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep, "place-test": cmd_place_test,
-     "set-offset": cmd_set_offset, "align-board": cmd_align_board,
+     "set-offset": cmd_set_offset, "align-board": cmd_align_board, "run-job": cmd_run_job,
+     "tip": cmd_tip, "teach-feeder": cmd_teach_feeder, "teach-bin": cmd_teach_bin, "feed": cmd_feed,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,
      "light-test": cmd_light_test, "inspect-up": cmd_inspect_up}[a.cmd](cfg, a)
