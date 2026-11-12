@@ -711,21 +711,77 @@ def cmd_feed(cfg, a):
         bus.close()
 
 
+def _find_job(cfg, name):
+    """A job file path, or a job name from jobs/ (spaces may be written as _, .job.json optional)."""
+    if os.path.isfile(name):
+        return name
+    d = C.rel(cfg, "jobs")
+    names = sorted(f for f in os.listdir(d) if f.endswith(".job.json")) if os.path.isdir(d) else []
+    for f in names:
+        stem = f[:-len(".job.json")]
+        if name in (f, stem, stem.replace(" ", "_")):
+            return os.path.join(d, f)
+    raise SystemExit(f"no job {name!r}: jobs/ has " +
+                     (", ".join(n[:-9].replace(" ", "_") for n in names) or "nothing"))
+
+
 def cmd_run_job(cfg, a):
+    """--hmi: started from the touchscreen (RUN_JOB macro): prompts become dialogs, messages go to
+    the Klipper console, errors are shown there too, and only one job runs at a time."""
+    if not a.hmi:
+        return _run_job(cfg, a, None)
+    from .hmi import Hmi
+    hmi = Hmi(make_mr(cfg))
+    lock = None
+    try:
+        try:
+            import fcntl
+            lock = open("/tmp/pnpvision_run_job.lock", "w")
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except ImportError:
+            pass
+        except OSError:
+            raise SystemExit("a job is already running (PNP_STOP to end it)")
+        hmi.start()
+        return _run_job(cfg, a, hmi)
+    except BaseException as e:            # SystemExit too: those carry the useful message
+        hmi.error(f"RUN_JOB failed: {e}")
+        raise
+    finally:
+        if lock is not None:
+            lock.close()
+
+
+def _run_job(cfg, a, hmi):
     from .board import BoardPose
     from .feeders import FeederBank
     from .runner import JobError, dry_run, plan_job, run_job
+    say = hmi.say if hmi else print
+    ask = hmi.ask if hmi else input
+    a.job = _find_job(cfg, a.job)
     with open(a.job, encoding="utf-8") as f:
         job = json.load(f)
     if job.get("format") != "oshe-pnp-job/1":
         raise SystemExit(f"{a.job}: not an oshe-pnp-job/1 file")
     ms_path = C.rel(cfg, "calibration/machine.json")
     ms = MS.load(ms_path)
+    if a.align:
+        from types import SimpleNamespace
+        rot = a.rot
+        if rot is None and ms.get("board_pose"):
+            rot = round(BoardPose.from_dict(ms["board_pose"]["pose"]).angle_deg, 1)
+        if rot is None:
+            raise SystemExit("--align needs --rot (no earlier alignment to take the board angle from)")
+        say(f"aligning the board (camera must be on alignment pad A, board at about {rot} deg)...")
+        cmd_align_board(cfg, SimpleNamespace(job=a.job, rot=rot, search=3.0, min_score=0.5, show=[]))
+        ms = MS.load(ms_path)
+        say(f"board aligned: {BoardPose.from_dict(ms['board_pose']['pose']).angle_deg:.2f} deg, "
+            f"worst pad residual {ms['board_pose'].get('max_residual_mm', 0):.3f} mm")
     bp = ms.get("board_pose")
     if not bp:
         raise SystemExit("no board pose: run align-board first")
     if bp.get("job_board") != job["board"]["name"]:
-        print(f"WARNING: the saved board pose is for '{bp.get('job_board')}', this job is '{job['board']['name']}'")
+        say(f"WARNING: the saved board pose is for '{bp.get('job_board')}', this job is '{job['board']['name']}'")
     pose = BoardPose.from_dict(bp["pose"])
     packages = cfg.get("packages", {})
     only = set(a.only) if a.only else None
@@ -749,19 +805,19 @@ def cmd_run_job(cfg, a):
         return
     tips = ms.get("tips") or {}
     bus = _feeder_bus(cfg, sim=a.no_feeders)
-    bank = FeederBank.load(_feeders_path(cfg), bus)
+    bank = FeederBank.load(_feeders_path(cfg), bus, ask=ask)
     for fd in bank.feeders:
         fd.by_hand = a.no_feeders
     steps, problems = plan_job(job, bank, tips, packages, only)
-    print(f"job '{job['board']['name']}': {len(steps)} placements; tips in order: "
+    say(f"job '{job['board']['name']}': {len(steps)} placements; tips in order: "
           f"{list(dict.fromkeys(s['tip'] for s in steps))}; feeders: "
           f"{sorted({s['feeder'].id for s in steps if s['feeder']})}")
     if problems:
         bus.close()
         raise SystemExit("job can't run:\n  " + "\n  ".join(problems))
-    print("Before starting: VISION_HOME done, align-board done for this board, UP_LIGHT_ON, "
-          "feeders loaded with a part in each pick pocket.")
-    if input("Start? [y/N] ").strip().lower() != "y":
+    say("Before starting: VISION_HOME done, align-board done for this board, UP_LIGHT_ON, "
+        "feeders loaded with a part in each pick pocket.")
+    if ask("Start? [y/N] ").strip().lower() != "y":
         bus.close()
         return
     log_db = EventLog(C.rel(cfg, cfg["log"]["db"]))
@@ -809,11 +865,13 @@ def cmd_run_job(cfg, a):
             return f"shift {np.round(d, 3).tolist()} mm"
 
         rot = Rotator.from_config(mr.gcode, cfg["rotation"])
+        stats = {}
         results = run_job(job, pose, ms, mr, up_inspect, rot, bank, tips, packages, only,
                           current_tip=a.tip or ms.get("current_tip"),
                           recentre=None if a.no_recentre else recentre,
-                          reject_xy=ms.get("reject_bin_xy"), log=log, retries=a.retries,
-                          verify_empty=not a.no_verify)
+                          reject_xy=ms.get("reject_bin_xy"), ask=ask, say=say, log=log, retries=a.retries,
+                          verify_empty=not a.no_verify, stats=stats,
+                          stop_requested=hmi.stop_requested if hmi else None)
     except JobError as e:
         raise SystemExit(str(e))
     finally:
@@ -827,8 +885,73 @@ def cmd_run_job(cfg, a):
     path = C.rel(cfg, f"results/job_{stamp}.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
-        json.dump({"job": os.path.abspath(a.job), "pose": bp, "results": results}, f, indent=2, default=str)
-    print("saved", path, f"(up-camera images in {img_dir}/)")
+        json.dump({"job": os.path.abspath(a.job), "pose": bp, "timing": stats, "results": results}, f,
+                  indent=2, default=str)
+    say(f"saved results/job_{stamp}.json (up-camera images in {img_dir}/)")
+
+
+def cmd_check_machine(cfg, a):
+    """After someone else used the gantry: what still holds, what to redo (see check.py)."""
+    from .check import check_machine
+    mr = make_mr(cfg)
+    ms_path = C.rel(cfg, "calibration/machine.json")
+    ms = MS.load(ms_path)
+    tip = a.tip or ms.get("current_tip")
+    t = (ms.get("tips") or {}).get(tip, {})
+    inspect_z = a.inspect_z or t.get("inspect_z") or ms.get("up_cam_focus_z") or 34.5
+    print(f"tip {tip or '?'}: inspect Z{inspect_z}, stored up-camera centre {ms['up_cam_xy_mm']}, "
+          f"down-camera offset {ms['down_cam_offset_mm']}")
+    if not a.yes and input("The NOZZLE must be EMPTY and the head/tip fitted (it goes down to the inspect Z "
+                           "over the up camera). Go on? [y/N] ").strip().lower() != "y":
+        return
+    down_cam, down_lens = open_cam(cfg, "down")
+    up_cam, up_lens = open_cam(cfg, "up")
+    lc = cfg["lighting"]["up"]
+    settle = cfg["moonraker"]["settle_s"]
+    try:
+        vh = ms.get("visual_home") or {}
+        down = {"grab": lambda: down_lens.undistort(down_cam.fresh(settle_s=settle)),
+                "locate": partial(find_circle, r_min_px=vh.get("rmin", 15), r_max_px=vh.get("rmax", 120),
+                                  polarity=vh.get("polarity", "both"), threshold=vh.get("thresh")),
+                "motion": MotionMap.load(C.rel(cfg, cfg["cameras"]["down"]["motion_map"])),
+                "target_px": (down_lens.newK[0, 2], down_lens.newK[1, 2])}
+        light = make_light(lc, mr)
+        bore = t.get("bore", {})
+        up = {"grab": lambda: grab_lit(up_cam, light, up_lens, lc["settle_s"], False, keep_on=True),
+              "locate": partial(find_circle, r_min_px=bore.get("rmin", 8), r_max_px=bore.get("rmax", 30),
+                                polarity=bore.get("polarity", "dark"), threshold=bore.get("thresh", 40)),
+              "motion": MotionMap.load(C.rel(cfg, cfg["cameras"]["up"]["motion_map"])),
+              "target_px": (up_lens.newK[0, 2], up_lens.newK[1, 2])}
+        found = check_machine(mr, ms, down, up, inspect_z, apply=a.apply)
+    finally:
+        down_cam.stop()
+        up_cam.stop()
+    if a.apply:
+        MS.save(ms_path, up_cam_xy_mm=ms["up_cam_xy_mm"], down_cam_offset_mm=ms["down_cam_offset_mm"])
+    redo = [f for f in found if f.level != "OK"]
+    print("\n" + ("ALL OK" if not redo else f"{len(redo)} thing(s) to look at:\n  " +
+                  "\n  ".join(str(f) for f in redo)))
+    print("Not checked here (needs you): the tip's board touch Z if the tip was taken off "
+          "(`tip NAME --board-touch-z Z`), and align-board if the board moved.")
+
+
+def cmd_make_launchers(cfg, a):
+    """One tiny .gcode file per job (and an _ALIGN variant): selecting it in the touchscreen's
+    print list runs RUN_JOB, which starts run-job --hmi in the background."""
+    d = C.rel(cfg, "jobs")
+    jobs = sorted(f[:-len(".job.json")] for f in os.listdir(d) if f.endswith(".job.json"))
+    if not os.path.isdir(a.gcodes):
+        raise SystemExit(f"{a.gcodes} not found (give --gcodes)")
+    extra = " NO_FEEDERS=1" if a.no_feeders else ""
+    for stem in jobs:
+        name = stem.replace(" ", "_")
+        for suffix, flag, what in (("", "", "uses the last board alignment"),
+                                   ("_ALIGN", " ALIGN=1", "aligns the board first: down camera on pad A")):
+            path = os.path.join(a.gcodes, f"PNP_{name}{suffix}.gcode")
+            with open(path, "w") as f:
+                f.write(f"; pnpvision launcher for jobs/{stem}.job.json ({what})\n"
+                        f"RUN_JOB JOB={name}{flag}{extra}\n")
+            print("wrote", path)
 
 
 def cmd_set_offset(cfg, a):
@@ -938,6 +1061,16 @@ def main():
     p.add_argument("--no-recentre", action="store_true", help="don't re-centre after a tip change")
     p.add_argument("--no-feeders", action="store_true",
                    help="no feeder Nano: servo feeders don't stroke (load parts by hand)")
+    p.add_argument("--align", action="store_true",
+                   help="align the board first (down camera on alignment pad A); angle from --rot or the last alignment")
+    p.add_argument("--rot", type=float, help="(with --align) rough board rotation, deg CCW")
+    p.add_argument("--hmi", action="store_true",
+                   help="started from the touchscreen (RUN_JOB macro): dialogs instead of keyboard prompts")
+    p = sub.add_parser("make-launchers", help="write a PNP_<job>.gcode file per job into the print list, "
+                       "so a job can be started from the touchscreen")
+    p.add_argument("--gcodes", default=os.path.expanduser("~/printer_data/gcodes"),
+                   help="Klipper's gcode folder (default ~/printer_data/gcodes)")
+    p.add_argument("--no-feeders", action="store_true", help="launchers run with NO_FEEDERS=1")
     p = sub.add_parser("tip", help="record a nozzle tip's heights and/or make it the current tip")
     p.add_argument("name", help="e.g. N14")
     p.add_argument("--board-touch-z", type=float, help="Z where this tip touches the bare board top")
@@ -955,6 +1088,13 @@ def main():
     p = sub.add_parser("feed", help="stroke a servo feeder (tests the Nano)")
     p.add_argument("servo", type=int)
     p.add_argument("--times", type=int, default=1)
+    p = sub.add_parser("check-machine", help="after the gantry was used for something else: checks "
+                       "printer.cfg, homing, both camera maps and the nozzle centre; reports what to redo")
+    p.add_argument("--apply", action="store_true",
+                   help="if the nozzle tip moved, save the new up-camera centre and down-camera offset")
+    p.add_argument("--tip", help="tip on the nozzle (default: current_tip in machine.json)")
+    p.add_argument("--inspect-z", type=float, help="default: the tip's inspect_z")
+    p.add_argument("--yes", action="store_true", help="don't ask (nozzle is empty)")
     p = sub.add_parser("set-offset", help="set the down-camera-to-nozzle offset (mm) directly")
     p.add_argument("x", type=float)
     p.add_argument("y", type=float)
@@ -964,7 +1104,7 @@ def main():
     a = ap.parse_args()
     cfg = C.load(a.config)
     {"check-lens": cmd_check_lens, "snapshot": cmd_snapshot, "find-dot": cmd_find_dot, "focus-sweep": cmd_focus_sweep, "place-test": cmd_place_test,
-     "set-offset": cmd_set_offset, "align-board": cmd_align_board, "run-job": cmd_run_job,
+     "set-offset": cmd_set_offset, "check-machine": cmd_check_machine, "make-launchers": cmd_make_launchers, "align-board": cmd_align_board, "run-job": cmd_run_job,
      "tip": cmd_tip, "teach-feeder": cmd_teach_feeder, "teach-bin": cmd_teach_bin, "feed": cmd_feed,
      "calibrate-motion": cmd_calibrate_motion, "calibrate-offset": cmd_calibrate_offset, "datum": cmd_datum,
      "repeatability": cmd_repeatability, "home": cmd_home,

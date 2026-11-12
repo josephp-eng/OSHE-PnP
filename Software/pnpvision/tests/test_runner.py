@@ -27,6 +27,12 @@ TIPS = {"N14": {"board_touch_z": 38.25, "inspect_z": 34.5}, "N08": {"board_touch
         "N24": {"board_touch_z": 38.4, "inspect_z": 33.5}}
 BIN = np.array([60.0, 130.0])
 
+# Rough time model for the simulated clock (NOT measured on the machine): trapezoid moves at the
+# requested feedrate with this acceleration, camera frame + detection per inspection, rotation speed.
+ACCEL = 2000.0          # mm/s^2 (place-test runs with --accel 2000)
+INSPECT_S = 0.6         # settle_s 0.25 + up-light settle 0.2 + snapshot/detection
+ROT_DEG_S = 180.0       # nozzle rotation speed
+
 
 class World:
     def __init__(self, feeders):
@@ -41,6 +47,7 @@ class World:
         self.empty_next = {"F1"}         # first stroke of F1 leaves an empty pocket
         self.bad_next = {"F2"}           # first part F2 delivers is the wrong size
         self.counts = {}
+        self.t = 0.0                     # simulated clock, s
         for fd in feeders:
             self.refill(fd.id)
 
@@ -76,16 +83,28 @@ class World:
     def position(self):
         return tuple(self.xyz)
 
+    @staticmethod
+    def move_s(dist, feedrate):
+        v = feedrate / 60.0
+        if dist <= v * v / ACCEL:                     # never reaches full speed
+            return 2.0 * np.sqrt(dist / ACCEL)
+        return dist / v + v / ACCEL
+
     def move_abs(self, x=None, y=None, z=None, feedrate=None):
+        f = feedrate or 3000.0
         if (x is not None or y is not None) and self.xyz[2] > self.safe_travel_z + 1e-6:
+            self.t += self.move_s(self.xyz[2] - self.safe_travel_z, f)
             self.xyz[2] = self.safe_travel_z
-        for i, v in enumerate((x, y, z)):
-            if v is not None:
-                self.xyz[i] = v
+        new = [v if v is not None else c for v, c in zip((x, y, z), self.xyz)]
+        dxy = float(np.hypot(new[0] - self.xyz[0], new[1] - self.xyz[1]))
+        self.t += self.move_s(dxy, f) + self.move_s(abs(new[2] - self.xyz[2]), f)
+        self.xyz = new
 
     def gcode(self, script):
         nozzle = np.array(self.xyz[:2])
         for line in script.splitlines():
+            if line.startswith("G4 P"):
+                self.t += float(line[4:]) / 1000.0
             if line.startswith("VALVE_ON") and self.held is None and self.xyz[2] > 37.0:
                 for fid, part in self.pockets.items():
                     if part is not None and np.linalg.norm(part["xy"] - nozzle) < 0.5:
@@ -102,12 +121,14 @@ class World:
             elif line.startswith("MANUAL_STEPPER"):
                 m = float(line.split("MOVE=")[1].split()[0])
                 d = TRUE_DIR * (m - self.motor)
+                self.t += abs(m - self.motor) / ROT_DEG_S
                 self.motor = m
                 if self.held is not None:
                     self.held["u"] = rotate_xy(self.held["u"], d)
                     self.held["phi"] += d
 
     def up_inspect(self, body):
+        self.t += INSPECT_S
         if self.held is None or np.linalg.norm(np.array(self.xyz[:2]) - UP_XY) > 0.01:
             return {"ok": False, "reason": "no part found"}
         pkg = package_info(self.held["pkg"])
@@ -154,9 +175,11 @@ def _run():
     w = holder["w"] = World(bank.feeders)
     ms = {"down_cam_offset_mm": OFF.tolist(), "up_cam_xy_mm": UP_XY.tolist()}
     recentred = []
+    stats = {}
     res = run_job(job, POSE, ms, w, w.up_inspect, Rotator(w.gcode, direction=TRUE_DIR), bank, TIPS,
                   only=set(ONLY), current_tip="N14", recentre=lambda t: recentred.append(t) or "ok",
-                  reject_xy=BIN, ask=ask, say=lambda *a: None)
+                  reject_xy=BIN, ask=ask, say=lambda *a: None, clock=lambda: w.t, stats=stats)
+    w.stats = stats
     return job, w, res, asks, recentred, bank
 
 
@@ -193,6 +216,28 @@ def test_run_job_simulated():
     assert np.linalg.norm(learned - [0.12, -0.08]) < 0.08, learned
     assert any("F3" in a and "advance the tape" in a for a in asks), asks   # manual track prompt
     assert any("Fit nozzle tip N08" in a for a in asks), asks
+
+
+def test_timing_and_stop():
+    job, w, res, asks, recentred, bank = _run()
+    st = w.stats
+    assert st["placed"] == len(ONLY) and st["cph"] > 0, st
+    assert all(r["cycle_s"] > 0 and {"pick", "inspect", "place"} <= set(r["t"]) for r in res), res
+    # phases add up to the machine time (prompts excluded; the 'job done' lift is outside any phase)
+    assert abs(sum(r["cycle_s"] for r in res) - st["machine_s"]) < 1.0, st
+    print("  sim estimate (time model, not measured):", st["s_per_part"], "s/part,", st["cph"], "CPH,",
+          st["mean_phase_s"])
+    # HMI stop button: stops cleanly before the 3rd part
+    job = _job()
+    holder = {}
+    bank = _bank(SimFeederBus(on_feed=lambda s: holder["w"].on_feed(s)), lambda p: holder["w"].manual_advance(p))
+    w = holder["w"] = World(bank.feeders)
+    calls = []
+    res = run_job(job, POSE, {"down_cam_offset_mm": OFF.tolist(), "up_cam_xy_mm": UP_XY.tolist()}, w,
+                  w.up_inspect, Rotator(w.gcode, direction=TRUE_DIR), bank, TIPS, only=set(ONLY),
+                  current_tip="N08", reject_xy=BIN, ask=lambda p: "", say=lambda *a: None,
+                  stop_requested=lambda: calls.append(1) or len(calls) > 2)
+    assert len(res) == 2 and all(r["status"] == "placed" for r in res), res
 
 
 def test_unsafe_z_refused():

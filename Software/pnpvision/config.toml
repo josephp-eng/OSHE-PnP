@@ -111,7 +111,7 @@ clamp_height_mm = 10.0
 # name (`ls /dev/serial/by-id/` on the Pi once it's plugged in) over /dev/ttyUSB0.
 port = "/dev/ttyUSB0"
 baud = 115200
-timeout_s = 8.0                 # a stroke takes ~1.5-2 s
+timeout_s = 8.0                 # a stroke takes ~1-1.5 s (firmware: 90 deg out and back at 5 ms/deg + 2 x 250 ms)
 file = "calibration/feeders.json"   # written by teach-feeder
 
 # [packages."<KiCad footprint>"] overrides/additions to pnpvision/parts.py DEFAULT_PACKAGES, e.g.

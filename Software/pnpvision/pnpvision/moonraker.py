@@ -30,6 +30,18 @@ class Moonraker:
         r.raise_for_status()
         return r.json()["result"]["status"][obj]
 
+    def objects(self):
+        """Names of all Klipper objects (config sections), e.g. 'gcode_macro VALVE_ON'."""
+        r = requests.get(f"{self.url}/printer/objects/list", timeout=10)
+        r.raise_for_status()
+        return r.json()["result"]["objects"]
+
+    def query(self, obj):
+        """One object's status; for names with spaces, e.g. 'gcode_macro PNP_ANSWER'."""
+        r = requests.get(f"{self.url}/printer/objects/query", params={obj: ""}, timeout=10)
+        r.raise_for_status()
+        return r.json()["result"]["status"].get(obj, {})
+
     def position(self):
         x, y, z = self.status("toolhead")["position"][:3]
         return x, y, z
